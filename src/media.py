@@ -492,7 +492,8 @@ async def handle_tg_media(message: types.Message) -> None:
                                 user_id=user_id, platform="tg")
     user_imgs = [image_bytes] if image_bytes else None
     await _tg().send_tg_ai_response(message, chat_id, user_id, answer, user_text=prompt, user_images=user_imgs)
-    asyncio.create_task(extract_memory(chat_key, f"{display_name}: [медиа] {caption}", answer))
+    asyncio.create_task(extract_memory(chat_key, f"{display_name}: [медиа] {caption}", answer,
+                                       platform="tg", user_id=user_id, source_chat_id=chat_id))
 
 
 # ============================================================
@@ -661,7 +662,8 @@ async def handle_tg_text(message: types.Message) -> None:
         messages = memory_to_messages(get_chat_memory(chat_key))
         answer = await ask_ai_async(messages=messages, chat_id=chat_id, user_id=user_id, platform="tg")
         await _tg().send_tg_ai_response(message, chat_id, user_id, answer, user_text=text)
-        asyncio.create_task(extract_memory(chat_key, f"{display_name}: {text}", answer))
+        asyncio.create_task(extract_memory(chat_key, f"{display_name}: {text}", answer,
+                                           platform="tg", user_id=user_id, source_chat_id=chat_id))
         asyncio.create_task(_tg().maybe_reply_to_old_message_tg(message, chat_id, user_id))
         return
 

@@ -257,7 +257,7 @@ async def on_message(message: discord.Message) -> None:
                 logger.warning(f"DS avatar: {e}")
         return
 
-    if not is_dm and ("кульш логи" in content_lower or "kulsh logs" in content_lower):
+    if "кульш логи" in content_lower or "kulsh logs" in content_lower:
         if message.author.id not in AUTHORIZED_UPDATERS:
             await message.reply(tr(lang, "ds_update_no_access"))
             return
@@ -487,7 +487,8 @@ async def on_message(message: discord.Message) -> None:
                                             image_mime=img_mime, chat_id=chat_id,
                                             user_id=user_id, platform="ds")
                 await send_ds_ai_response(message, chat_id, user_id, answer, user_text=prompt)
-                asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer))
+                asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer,
+                                                   platform="ds", user_id=user_id, source_chat_id=chat_id))
             except Exception as e:
                 logger.info(f"DS media: {e}")
                 await message.reply(tr(lang, "ds_attachments_error"))
@@ -501,7 +502,8 @@ async def on_message(message: discord.Message) -> None:
             answer = await ask_ai_async(messages=messages, chat_id=chat_id,
                                         user_id=user_id, platform="ds")
             await send_ds_ai_response(message, chat_id, user_id, answer, user_text=message.content)
-            asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: {message.content}", answer))
+            asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: {message.content}", answer,
+                                               platform="ds", user_id=user_id, source_chat_id=chat_id))
         return
 
     add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id, message.content, message_id=message.id)

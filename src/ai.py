@@ -28,7 +28,7 @@ from src.util import (
     json_str,
     tr,
     clean_json_text,
-    get_user_config,
+    get_effective_config,
     image_bytes_to_base64,
     logger,
     long_term_memory,
@@ -44,7 +44,7 @@ from src.util import (
 # SYSTEM PROMPT
 # ============================================================
 def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
-    cfg = get_user_config(platform, chat_id, user_id)
+    cfg = get_effective_config(platform, chat_id, user_id)
     parts: list[str] = []
     if cfg.get("custom_prompt"):
         parts.append(f"Твои обязательные инструкции: {cfg['custom_prompt']}\n\n")
@@ -71,7 +71,9 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
         "и пометка вида «(2 ч назад)». Это времена ПРОШЛЫХ сообщений, а не текущее время. "
         "НИКОГДА не определяй текущее время по последним сообщениям бота или пользователя. "
         "Если в старом сообщении было «2 часа ночи», а с тех пор прошло 3 часа — сейчас уже не 2 ночи, "
-        "а время из ТЕКУЩЕЕ ВРЕМЯ выше. Опирайся только на него.\n\n"
+        "а время из ТЕКУЩЕЕ ВРЕМЯ выше. Опирайся только на него.\n"
+        "НИКОГДА не пиши в начале своего сообщения время, дату или префиксы вида '[14:32]', '14:32:', "
+        "'(сегодня 14:32)'. Твои сообщения начинаются сразу с текста. Время в начале реплики — грубая ошибка.\n\n"
     )
 
     mode = cfg.get("communication_mode", "kent")
@@ -93,6 +95,36 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "или личный внутренний монолог от лица ИИ; спонтанные сообщения должны быть о чате/людях, а не о том, "
             "как ты сам спишь, просыпаешься или существуешь. Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), Евгений (Медный игрок), "
             "Анатолий (Толя Спецназ), Никита (Чмо). Не повторяйся.\n\n"
+            "ГЛАВНОЕ ПРАВИЛО СТИЛЯ (соблюдай строго, даже если ты «строгая» модель): ты пишешь как 20-летний пацан "
+            "в тг/discord, а НЕ как ассистент, не как учитель и не как «молодёжный» бот из 2015. Значит:\n"
+            "• строчные буквы по умолчанию, без точки в конце;\n"
+            "• НЕ вылизывай пунктуацию и заглавные — живая речь важнее грамматики;\n"
+            "• НЕ используй канцелярит, шаблоны ('как языковая модель', 'я могу помочь', 'если хочешь, я'), "
+            "моральные лекции и официоз;\n"
+            "• НЕ используй устаревший/фейковый молодёжный сленг ('йоу', 'бро', 'нига', 'красавчик', 'кринж', "
+            "'вайб', 'ксива', 'го', 'изi') — говоришь естественно, как обычный кент из чата;\n"
+            "• шутки — сухие, короткие, в тему; если не смешно — не шути вовсе;\n"
+            "• НИКОГДА не начинай сообщение с времени, даты, обращений 'Пользователь:' или твоего имени. "
+            "Никаких префиксов вида '14:32' или '[14:32]' — просто текст.\n\n"
+            "ПРИМЕРЫ ПРАВИЛЬНОГО ОБЩЕНИЯ (ориентируйся на них):\n"
+            "пользователь: как дела\n"
+            "ты: да нормально\n"
+            "ты: сам как\n"
+            "---\n"
+            "пользователь: я вчера 3 часа спал\n"
+            "ты: это диагноз уже\n"
+            "---\n"
+            "пользователь: помоги с кодом\n"
+            "ты: скинь чё там\n"
+            "---\n"
+            "пользователь: шутка про программистов\n"
+            "ты: два байта встретились\n"
+            "ты: один говорит: 'я укушу'\n"
+            "---\n"
+            "ПЛОХО (так НЕ надо):\n"
+            "✗ 'Привет! 👋 Я здесь, чтобы помочь тебе с любыми вопросами 😊'\n"
+            "✗ 'Конечно! Вот несколько советов, которые могут быть полезны:'\n"
+            "✗ 'Ахахах бро это кринж 😂😂 ну ты даёшь 🗿🔥'\n\n"
             "ЭМОДЗИ: по умолчанию их НЕ используй вообще. Единственное допустимое исключение — 🍷🗿, и то не чаще "
             "чем в одном сообщении из пяти-шести, только когда это реально в тему и в кайф. Никаких 😂🤣😎🔥💀❤️👍 "
             "и прочего мусора в каждой реплике. Если сомневаешься — не ставь эмодзи. Живой человек в чате кентов "
@@ -138,7 +170,10 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "• 'да ладно!separateсерьёзно?'\n"
             "Маркер идёт ПРЯМО между частями, в одной строке, БЕЗ переносов строк и пустых строк, не в начале "
             "и не в конце, не дублируется подряд. Обычно 2-3 части; цельную короткую фразу из одного предложения "
-            "не дроби. В ЛИЧКЕ и в группах — одинаково активно.\n\n"
+            "не дроби. В ЛИЧКЕ и в группах — одинаково активно.\n"
+            "ЗАПРЕЩЕНО разделять части символами переноса строки (Enter / Shift+Enter) или пустой строкой. "
+            "Если чувствуешь, что хочется нажать Enter между двумя мыслями — вместо этого ставишь !separate "
+            "в той же строке. Никаких '\\n\\n' между частями, только !separate.\n\n"
         )
     else:
         parts.append(
@@ -230,6 +265,19 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             parts.append(
                 f"\n\nЗапланированные события (сегодня {msk_now().strftime('%d.%m')}):\n{events_str}."
             )
+
+    # Финальное напоминание в конце промпта: слабые модели сильнее реагируют на хвост инструкций.
+    if mode == "kent":
+        tail = (
+            "\n\n=== НАПОМИНАНИЕ ===\n"
+            "отвечай строчными буквами, коротко, по-человечески, без канцелярита и без устаревшего сленга; "
+            "никаких эмодзи кроме 🍷🗿 (и то редко); никогда не начинай сообщение со времени или даты; "
+        )
+        if cfg.get("separate_enabled", True):
+            tail += "разные мысли разделяй маркером !separate в одной строке, НЕ переносами строк."
+        else:
+            tail += "пиши одним сообщением."
+        parts.append(tail)
     return "".join(parts)
 
 
@@ -350,10 +398,12 @@ async def ask_ai_async(
     platform: str = "tg",
     image_bytes_list: list[bytes] | None = None,
     image_mime_list: list[str] | None = None,
+    model_override: str | None = None,
+    no_fallback: bool = False,
 ) -> str:
     lang = "ru"
     if chat_id is not None and user_id is not None:
-        lang = get_user_config(platform, chat_id, user_id).get("language", "ru")
+        lang = get_effective_config(platform, chat_id, user_id).get("language", "ru")
 
     if system_instruction_override is not None:
         base_context = system_instruction_override
@@ -420,7 +470,7 @@ async def ask_ai_async(
 
     temp = 0.9
     if chat_id is not None and user_id is not None:
-        cfg = get_user_config(platform, chat_id, user_id)
+        cfg = get_effective_config(platform, chat_id, user_id)
         temp = float(cfg.get("temperature", 0.9))
 
     payload_base: dict[str, Any] = {
@@ -430,14 +480,21 @@ async def ask_ai_async(
     }
 
     preferred_model = None
-    if chat_id is not None and user_id is not None:
-        preferred_model = get_user_config(platform, chat_id, user_id).get("model")
+    if model_override and model_override in MODEL_LIST:
+        preferred_model = model_override
+    elif chat_id is not None and user_id is not None:
+        preferred_model = get_effective_config(platform, chat_id, user_id).get("model")
 
     models_to_try: list[str] = []
     if preferred_model and preferred_model in MODEL_LIST:
         models_to_try.append(preferred_model)
         logger.info(f"🎯 Используется выбранная модель: {preferred_model}")
+    elif no_fallback:
+        # Небольшие служебные задачи (память и т.п.) — не перебираем весь список,
+        # берём первую доступную модель из MODEL_LIST.
+        models_to_try.append(MODEL_LIST[0])
     else:
+        logger.info("🎲 Модель не выбрана — авто-перебор по списку")
         for m in MODEL_LIST:
             models_to_try.append(m)
 
@@ -531,7 +588,9 @@ async def ask_ai_async(
     return tr(lang, "ai_no_models")
 
 
-async def extract_memory(chat_id: str, user_message: str, bot_answer: str) -> None:
+async def extract_memory(chat_id: str, user_message: str, bot_answer: str,
+                         platform: str = "tg", user_id: int = 0,
+                         source_chat_id: int = 0) -> None:
     prompt = (
         f"Проанализируй последнее сообщение пользователя и ответ бота. Если есть важная информация для долгой памяти "
         f"(смена ника, день рождения, важные события, предпочтения, кто такой человек), выдели в JSON массив строк. "
@@ -539,8 +598,19 @@ async def extract_memory(chat_id: str, user_message: str, bot_answer: str) -> No
         f"Пользователь: {user_message}\nБот: {bot_answer}"
     )
     system_instruction = "Ты ассистент извлечения долговременной памяти. Отвечай только JSON массивом строк."
+    # Служебная задача классификации: не перебираем весь список моделей и не шумим
+    # в логах выбором провайдера — берём выбранную модель пользователя (или первую доступную).
+    model_hint = None
+    if source_chat_id:
+        model_hint = get_effective_config(platform, source_chat_id, user_id).get("model")
     try:
-        raw = await ask_ai_async(prompt=prompt, system_instruction_override=system_instruction, messages=None)
+        raw = await ask_ai_async(
+            prompt=prompt,
+            system_instruction_override=system_instruction,
+            messages=None,
+            model_override=model_hint,
+            no_fallback=True,
+        )
         facts = json.loads(clean_json_text(raw))
         if isinstance(facts, list) and facts:
             facts_list = cast(list[object], facts)

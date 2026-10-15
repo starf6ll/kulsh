@@ -23,11 +23,11 @@ Now also a brutally honest **looksmaxxing analyst** – upload a face photo and 
   - **Silence Detection:** Intelligent buffering that waits for a pause in speech before processing.
 - **Multi-Provider AI Cascade** – Requests go through a priority chain and stop at the first success (see [Tech Stack](#️-tech-stack)).
 - **Contextual Memory** – Rolling context window (last 20 interactions) per chat, enriched with **relative timestamps** ("2 ч назад") so the model always knows how old each message is.
-- **Real-Time Awareness** – The current Moscow time is injected into every system prompt as the single source of truth, so the bot never anchors to a stale "it's 2 AM" from hours ago.
+- **Real-Time Awareness** – The current Moscow time is injected into every system prompt as the single source of truth, so the bot never anchors to a stale "it's 2 AM" from hours ago. A guard also strips any leading time/date prefix the model tries to add to its own messages.
 - **Vision Support** – Capable of analyzing images and providing sarcastic captions or technical descriptions.
 - **AI Personality** – Custom-tuned system prompt for a unique "homie" persona with three communication modes.
 - **Three Communication Modes** – `kent` (default homie), `assistant` (structured helper), `pro` (step-by-step reasoning, DM only).
-- **Message Splitting** – When enabled, the bot naturally breaks replies into multiple short messages (via `!separate` marker, with a sentence-boundary fallback) for a live, human texting feel.
+- **Message Splitting** – When enabled, the bot naturally breaks replies into multiple short messages (via `!separate` marker, with a fallback that also honours blank-line and sentence boundaries) for a live, human texting feel. The model is explicitly forbidden from using `Enter` / `Shift+Enter` as a separator.
 - **Emoji Reactions** – The bot can react to the user's message with an emoji instead of (or in addition to) a text reply, on **both** platforms.
 - **Emoji Discipline** – In `kent` mode the bot keeps emojis to an absolute minimum and the output is post-filtered (only 🍷🗿 survive).
 - **Remote Administration** – Built-in logging system that allows owners to retrieve `bot.log` files and live stdout directly via chat commands.
@@ -260,6 +260,10 @@ The `кульш обновись` command performs a `git fetch` + `git pull --f
 | `промпт` / `prompt` | `<текст>` / `сброс` | Custom mandatory prompt. |
 
 > **Note:** `разбивка` (Split) and `стриминг` (Streaming) are mutually exclusive.
+
+> **Note (Discord scope):** On Discord the single source of truth for every setting — including the model — is the **effective** config resolved from the channel `scope`. In `shared` scope all reads/writes go to the channel config, so the model the AI uses always matches the one shown in `/config`. In `self` scope each user has their own.
+
+> **Note (Logs):** `кульш логи` / `/logs` work in servers **and** in DMs for authorized admins.
 
 ---
 

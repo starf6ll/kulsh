@@ -883,14 +883,35 @@ def dedupe_markers(markers: list[str]) -> list[str]:
     return out
 
 
+def _is_structured(text: str) -> bool:
+    """Похоже ли на структурированный ответ (код/список/заголовок/таблица),
+    который НЕ надо дробить на отдельные сообщения."""
+    return bool(re.search(r'```|^\s*[-*+]\s|^\s*\d+\.\s|^#{1,6}\s|^\|', text, re.MULTILINE))
+
+
+def _split_on_blank_lines(text: str) -> list[str]:
+    """Модели (особенно GLM/DeepSeek) любят вместо !separate ставить пустую строку.
+    Если частей 2-4 и это не структурированный текст — считаем это разбивкой."""
+    if _is_structured(text):
+        return [text]
+    parts = [p.strip() for p in re.split(r'\n\s*\n', text.strip()) if p.strip()]
+    if not (2 <= len(parts) <= 4):
+        return [text]
+    if any(len(p) < 4 for p in parts):
+        return [text]
+    # Каждая часть не должна сама быть простынёй — иначе это реально один блок.
+    if sum(1 for p in parts if len(p) > 400) > 1:
+        return [text]
+    return parts
+
+
 def _auto_split_sentences(text: str) -> list[str]:
     """Фолбэк-разбивка: если маркер !separate не пришёл, но сообщение явно состоит из
     нескольких самостоятельных предложений — режем по границам предложений.
     Консервативно: только 2-4 части, только если это похоже на живую речь."""
     if not text or len(text) < 120:
         return [text]
-    # Не трогаем структурированные ответы (код, списки, заголовки, таблицы).
-    if re.search(r'```|^\s*[-*+]\s|^\s*\d+\.\s|^#{1,6}\s|^\|', text, re.MULTILINE):
+    if _is_structured(text):
         return [text]
     # Режем по . ! ? …, но не внутри сокращений/чисел.
     parts = re.split(r'(?<=[.!?…])\s+(?=[A-ZА-ЯЁ0-9«"(])', text.strip())
@@ -909,10 +930,15 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
     if separate_enabled:
         segments = split_by_separator(raw_clean)
         if len(segments) <= 1 and raw_clean.strip():
+            # Модель проигнорировала !separate и поставила пустые строки — уважаем это.
+            segments = _split_on_blank_lines(raw_clean.strip())
+        if len(segments) <= 1 and raw_clean.strip():
             segments = _auto_split_sentences(raw_clean.strip())
     else:
         raw_clean = SEPARATOR_PATTERN.sub(' ', raw_clean)
         raw_clean = re.sub(r'[ \t]{2,}', ' ', raw_clean).strip()
+        # Даже при выключенной разбивке не оставляем двойных пустых строк.
+        raw_clean = re.sub(r'\n{2,}', '\n', raw_clean)
         segments = [raw_clean]
     clean_segments = [s.strip() for s in segments if s and s.strip()]
     return clean_segments, markers
@@ -942,7 +968,40 @@ def scrub_stray_markers(text: str) -> str:
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
+    # Срезаем ведущий временной префикс, если модель всё-таки налепила его в начало.
+    text = strip_leading_time(text)
     return text.strip()
+
+
+_TIME_PREFIX_RE = re.compile(
+    r'^\s*'
+    # Вариант 1: HH:MM[:SS] [МСК] — опционально в скобках и с разделителем после.
+    r'(?:'
+    r'\[\s*\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*\]'
+    r'|\(\s*(?:(?:сегодня|today)\s+)?\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*\)'
+    r'|\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*[:：\-—]'
+    r')'
+    r'\s*'
+    # Опционально «сегодня/today/МСК» ещё раз.
+    r'(?:(?:сегодня|today)\s*[,:\-—]?\s*)?'
+)
+
+
+def strip_leading_time(text: str) -> str:
+    """Убирает ведущий префикс времени/даты, напр. '14:32 ', '[14:32] ', '14:32 МСК: '."""
+    if not text:
+        return text
+    original = text
+    for _ in range(2):
+        new = _TIME_PREFIX_RE.sub('', text, count=1)
+        new = re.sub(r'^\s*[-—:]+\s*', '', new)
+        if new == text:
+            break
+        text = new
+    # Не даём случайно съесть сообщение, которое целиком состоит из времени.
+    if not text.strip():
+        return original
+    return text
 
 
 EMOJI_RE = re.compile(
