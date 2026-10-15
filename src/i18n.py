@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.0
+# Kulsh GPT | v2.45.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -154,6 +154,8 @@ TEXTS: dict[str, tuple[str, str]] = {
     "psl_potential":           ("🔮 Потенциал:", "🔮 Potential:"),
     "psl_analysis":            ("📝 Анализ:", "📝 Analysis:"),
     "psl_advice":              ("⚡ Рекомендации:", "⚡ Recommendations:"),
+    "psl_not_a_face":          ("🤔 на фото не человек — тут нечего оценивать по PSL. кинь настоящую фотку лица.",
+                                "🤔 that's not a human face — nothing to rate. Send a real face photo."),
 
     "battle_need_photos":      ("Для баттла пришлите два фото одним альбомом с командой 'кульш баттл'.",
                                 "For a battle, send two photos in a single album with 'kulsh battle'."),

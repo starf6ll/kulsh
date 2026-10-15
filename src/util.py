@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.43.0
+# Kulsh GPT | v2.45.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.43.0"
+BOT_VERSION: str = "2.45.0"
 
 MSK = timezone(timedelta(hours=3))
 
@@ -61,6 +61,30 @@ def msk_time_str() -> str:
 
 def msk_datetime_str() -> str:
     return msk_now().strftime('%d.%m.%Y %H:%M:%S МСК')
+
+
+WEEKDAYS_RU = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
+
+
+def msk_human_now() -> str:
+    """Текущее московское время в человекочитаемом виде с днём недели."""
+    now = msk_now()
+    return f"{now.strftime('%H:%M')} ({WEEKDAYS_RU[now.weekday()]}, {now.strftime('%d.%m.%Y')}) МСК"
+
+
+def humanize_age(seconds: float) -> str:
+    """«5 минут назад», «3 часа назад», «2 дня назад»."""
+    seconds = max(0.0, seconds)
+    if seconds < 90:
+        return "только что"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes} мин назад"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} ч назад"
+    days = hours // 24
+    return f"{days} дн назад"
 
 
 def human_uptime() -> str:
@@ -116,6 +140,9 @@ NEUTRALBEATS_MODELS = (
     "deepseek-v4.1-flash",
     "kimi-k3",
     "deepseek-v4-pro",
+    "gpt-6-luna",
+    "claude-haiku-5-5",
+    "gpt-6.1-sol",
 )
 MODEL_LIST = [
     "glm-5.3-flash",
@@ -123,6 +150,8 @@ MODEL_LIST = [
     "kimi-k3",
     "deepseek-v4-pro",
     "gpt-6-luna",
+    "claude-haiku-5-5",
+    "gpt-6.1-sol",
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
     "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
@@ -133,6 +162,8 @@ MODEL_DISPLAY: dict[str, str] = {
     "kimi-k3": "🌙 Kimi K3",
     "deepseek-v4-pro": "🐳 DeepSeek V4 Pro",
     "gpt-6-luna": "🌑 GPT-6 Luna",
+    "claude-haiku-5-5": "🎐 Claude Haiku 5.5",
+    "gpt-6.1-sol": "☀️ GPT-6.1 Sol",
     "gemini-3.8-flash": "🚀 3.8 Flash",
     "gemini-3.7-flash": "⚡ 3.7 Flash",
     "gemini-3.6-flash": "🌠 3.6 Flash",
@@ -598,7 +629,7 @@ def add_user_memory(
 ) -> None:
     mem = get_chat_memory(chat_id)
     mem.append({
-        "type": "user", "time": msk_time_str(), "platform": platform,
+        "type": "user", "time": msk_time_str(), "ts": time.time(), "platform": platform,
         "display": display_name or "Unknown", "username": username or "",
         "id": str(user_id), "text": text or "",
         "media": media or [], "message_id": message_id,
@@ -607,14 +638,26 @@ def add_user_memory(
 
 def add_bot_memory(chat_id: str, text: str, message_id: int | None = None) -> None:
     mem = get_chat_memory(chat_id)
-    mem.append({"type": "bot", "time": msk_time_str(), "text": text or "", "message_id": message_id})
+    mem.append({
+        "type": "bot", "time": msk_time_str(), "ts": time.time(),
+        "text": text or "", "message_id": message_id,
+    })
 
 
 def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
+    now = time.time()
     for entry in mem_deque:
+        ts = entry.get("ts")
+        try:
+            age = humanize_age(now - float(ts)) if ts else ""
+        except (TypeError, ValueError):
+            age = ""
+        stamp = entry.get("time", "")
+        if age:
+            stamp = f"{stamp} ({age})"
         if entry.get("type") == "bot":
-            messages.append({"role": "model", "text": entry.get("text", "")})
+            messages.append({"role": "model", "text": f"[{stamp}] {entry.get('text', '')}"})
         else:
             uname = f"@{entry['username']}" if entry.get("username") else "no-username"
             media_str = ""
@@ -622,7 +665,7 @@ def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]
                 media_str = f" [прикрепил: {', '.join(entry['media'])}]"
             mid = entry.get("message_id")
             mid_str = f", msg_id:{mid}" if mid else ""
-            prefix = (f"[{entry.get('time','')}] [{entry.get('platform','')}] "
+            prefix = (f"[{stamp}] [{entry.get('platform','')}] "
                       f"{entry.get('display','?')} ({uname}, id:{entry.get('id','?')}{mid_str})")
             messages.append({"role": "user", "text": f"{prefix}{media_str}: {entry.get('text','')}"})
     return messages
@@ -776,7 +819,19 @@ SEPARATOR_PATTERN = re.compile(
     r'!+\s*sep[ae]rate(?![A-Za-z])',
     re.IGNORECASE,
 )
-REACT_PATTERN = re.compile(r'!\s*react\s*:\s*([^\s\n]+)', re.IGNORECASE)
+# Реакция: допускаем пробелы, скобки и префикс «реакция», например:
+#   !react:👍   !react: 👍🔥   [реакция 😂]   (реакция: 🗿)   !реакция 🤣
+# Осторожно: голое слово «реакция» вне скобок НЕ считаем маркером, чтобы не ломать обычный текст.
+REACT_PATTERN = re.compile(
+    r'(?:!\s*(?:react|реакция)\s*:?\s*([^\s\n]+)'
+    r'|[\[\(]\s*реакция\s*:?\s*([^\s\n\]\)]+(?:\s*[^\s\n\]\)]+)*?)\s*[\]\)])',
+    re.IGNORECASE,
+)
+# Узкий шаблон «!react:<эмодзи>» — для точного извлечения полезной нагрузки.
+REACT_STRICT_PATTERN = re.compile(
+    r'!\s*(?:react|реакция)\s*:\s*([^\s\n]+)',
+    re.IGNORECASE,
+)
 WHY_PATTERN = re.compile(r'!\s*why\s*:\s*([^\n]+)', re.IGNORECASE)
 
 SEARCH_MARKER_PATTERN = re.compile(r'!\s*search(?![A-Za-z])', re.IGNORECASE)
@@ -828,11 +883,33 @@ def dedupe_markers(markers: list[str]) -> list[str]:
     return out
 
 
+def _auto_split_sentences(text: str) -> list[str]:
+    """Фолбэк-разбивка: если маркер !separate не пришёл, но сообщение явно состоит из
+    нескольких самостоятельных предложений — режем по границам предложений.
+    Консервативно: только 2-4 части, только если это похоже на живую речь."""
+    if not text or len(text) < 120:
+        return [text]
+    # Не трогаем структурированные ответы (код, списки, заголовки, таблицы).
+    if re.search(r'```|^\s*[-*+]\s|^\s*\d+\.\s|^#{1,6}\s|^\|', text, re.MULTILINE):
+        return [text]
+    # Режем по . ! ? …, но не внутри сокращений/чисел.
+    parts = re.split(r'(?<=[.!?…])\s+(?=[A-ZА-ЯЁ0-9«"(])', text.strip())
+    parts = [p.strip() for p in parts if p.strip()]
+    if len(parts) < 2 or len(parts) > 4:
+        return [text]
+    # Каждая часть должна быть достаточно осмысленной.
+    if any(len(p) < 12 for p in parts):
+        return [text]
+    return parts
+
+
 def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[str], list[str]]:
     raw_clean, markers, _ = extract_utility_markers(raw or "")
     markers = dedupe_markers(markers)
     if separate_enabled:
         segments = split_by_separator(raw_clean)
+        if len(segments) <= 1 and raw_clean.strip():
+            segments = _auto_split_sentences(raw_clean.strip())
     else:
         raw_clean = SEPARATOR_PATTERN.sub(' ', raw_clean)
         raw_clean = re.sub(r'[ \t]{2,}', ' ', raw_clean).strip()
@@ -846,8 +923,12 @@ def scrub_stray_markers(text: str) -> str:
     if not text:
         return text
     pats = [
-        SEPARATOR_PATTERN, REACT_PATTERN, WHY_PATTERN,
-        SEARCH_MARKER_PATTERN, CHART_MARKER_PATTERN,
+        SEPARATOR_PATTERN,
+        REACT_STRICT_PATTERN,
+        REACT_PATTERN,
+        WHY_PATTERN,
+        SEARCH_MARKER_PATTERN,
+        CHART_MARKER_PATTERN,
         RECALL_MEDIA_ID_PATTERN,
         *UTILITY_PATTERNS.values(),
     ]
@@ -855,6 +936,8 @@ def scrub_stray_markers(text: str) -> str:
         text = pat.sub(' ', text)
     # Убираем одинокие '!' перед кириллицей (артефакт старых версий)
     text = re.sub(r'!\s*(?=[а-яёА-ЯЁ])', '', text)
+    # Убираем голые маркеры вида "!react" / "!separate" даже без полезной нагрузки
+    text = re.sub(r'!\s*(?:react|реакция|why|separate|sep[ae]rate)\b\s*:?', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
@@ -862,18 +945,56 @@ def scrub_stray_markers(text: str) -> str:
     return text.strip()
 
 
+EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"
+    "\U0001F1E6-\U0001F1FF"
+    "\U00002600-\U000027BF"
+    "\U0001F000-\U0001F2FF"
+    "\U00002B00-\U00002BFF"
+    "\U0000FE00-\U0000FE0F"
+    "\U00002190-\U000021FF"
+    "\U0001F900-\U0001F9FF"
+    "\U00002700-\U000027BF"
+    "]+",
+    flags=re.UNICODE,
+)
+# Разрешённые эмодзи в режиме кента (только эти).
+_KENT_ALLOWED_EMOJI = ("🍷", "🗿")
+
+
+def strip_chat_emojis(text: str) -> str:
+    """Мягко чистит эмодзи в режиме кента, оставляя только 🍷 и 🗿.
+    Используется как страховка, если модель всё равно пересолила со смайлами."""
+    if not text:
+        return text
+
+    def _keep(match: "re.Match[str]") -> str:
+        seq = match.group(0)
+        keep = "".join(ch for ch in seq if ch in _KENT_ALLOWED_EMOJI)
+        return keep
+
+    text = EMOJI_RE.sub(_keep, text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    return text.strip()
+
+
 def extract_reaction_and_why(text: str) -> tuple[str, str | None, str | None]:
     if not text:
         return "", None, None
-    react_match = REACT_PATTERN.search(text)
+    react_match = REACT_STRICT_PATTERN.search(text) or REACT_PATTERN.search(text)
     why_match = WHY_PATTERN.search(text)
     emojis: str | None = None
     why: str | None = None
     if react_match:
-        emojis = react_match.group(1).strip()
+        # REACT_PATTERN может вернуть одну из двух групп (см. шаблон).
+        emojis = (react_match.group(1) or (react_match.group(2) if react_match.lastindex and react_match.lastindex >= 2 else None) or "").strip() or None
     if why_match:
         why = why_match.group(1).strip()
-    cleaned = REACT_PATTERN.sub(' ', text)
+    cleaned = REACT_STRICT_PATTERN.sub(' ', text)
+    cleaned = REACT_PATTERN.sub(' ', cleaned)
     cleaned = WHY_PATTERN.sub(' ', cleaned)
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
     return cleaned, emojis, why
@@ -910,6 +1031,7 @@ def clean_extra_text(raw: str) -> list[str]:
         return []
     cleaned, _, _ = extract_utility_markers(raw)
     cleaned = SEPARATOR_PATTERN.sub(' ', cleaned)
+    cleaned = REACT_STRICT_PATTERN.sub(' ', cleaned)
     cleaned = REACT_PATTERN.sub(' ', cleaned)
     cleaned = WHY_PATTERN.sub(' ', cleaned)
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()

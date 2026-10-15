@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.42.1
+# Kulsh GPT | v2.45.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -60,6 +60,7 @@ from src.util import (
     scrub_stray_markers,
     set_ds_scope,
     split_emojis,
+    strip_chat_emojis,
     tr,
     AUTHORIZED_UPDATERS,
     GIF_POOL,
@@ -336,6 +337,8 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
 
     for i, seg in enumerate(all_segments):
         seg = scrub_stray_markers(seg)
+        if cfg.get("communication_mode", "kent") == "kent":
+            seg = strip_chat_emojis(seg)
         if not seg:
             continue
         try:
@@ -874,6 +877,9 @@ async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachme
         ai_data = await get_looksmaxxing_data(
             img_bytes, advice, lang=lang, chat_id=chat_id, user_id=user_id, platform="ds",
         )
+        if ai_data.get("not_a_face"):
+            await interaction.followup.send(ai_data.get("message", tr(lang, "psl_not_a_face")))
+            return
         if "error" in ai_data:
             await interaction.followup.send(ai_data['error'])
             return

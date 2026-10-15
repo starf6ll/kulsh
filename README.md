@@ -1,13 +1,13 @@
 # Kulsh AI Bot 🍷🗿
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.14%2B-blue)](https://python.org)
 [![License](https://img.shields.io/badge/License-AGPL_v3-green.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-Bot-5865F2)](https://discord.com/oauth2/authorize?client_id=1489421179461701663)
 [![Telegram](https://img.shields.io/badge/Telegram-Bot-26A5E4)](https://t.me/Kulsh_aibot)
 
 **Kulsh** is a foul-mouthed, witty, and oddly brilliant AI companion built for Discord and Telegram.  
 He codes, cracks jokes, insults your friends (lovingly), and can join voice channels to listen and speak his mind.  
-Powered by Google's Gemini API and a generous dose of post-Soviet humor.  
+Powered by a multi-provider AI cascade (DarkAPI → NeutralBeats → Google Gemini) and a generous dose of post-Soviet humor.  
 Now also a brutally honest **looksmaxxing analyst** – upload a face photo and get a full PSL rating, tier, and stylish infographic.
 
 > *"Ты — Кульш, современная языковая модель ИИ... Используй сочетание «🍷🗿»..."*
@@ -17,36 +17,49 @@ Now also a brutally honest **looksmaxxing analyst** – upload a face photo and 
 ## ✨ Features
 
 - **Dual Platform** – Fully asynchronous operation across **Telegram** and **Discord** simultaneously.
-- **Advanced Voice Interaction (Discord Exclusive)**  
+- **Advanced Voice Interaction (Discord Exclusive)**
   - **Speech Recognition:** Uses a custom `AudioSink` to listen to users. It has a **65% probability** to respond to any detected speech.
   - **Neural TTS:** High-fidelity voice synthesis via `edge-tts` (Microsoft Neural voices).
   - **Silence Detection:** Intelligent buffering that waits for a pause in speech before processing.
-- **Contextual Memory** – Maintains a rolling context window (last 5 interactions) per chat to ensure coherent long-term conversations.
+- **Multi-Provider AI Cascade** – Requests go through a priority chain and stop at the first success (see [Tech Stack](#️-tech-stack)).
+- **Contextual Memory** – Rolling context window (last 20 interactions) per chat, enriched with **relative timestamps** ("2 ч назад") so the model always knows how old each message is.
+- **Real-Time Awareness** – The current Moscow time is injected into every system prompt as the single source of truth, so the bot never anchors to a stale "it's 2 AM" from hours ago.
 - **Vision Support** – Capable of analyzing images and providing sarcastic captions or technical descriptions.
-- **AI Personality** – Custom-tuned system prompt for a unique "homie" persona that bypasses standard AI formalisms.
+- **AI Personality** – Custom-tuned system prompt for a unique "homie" persona with three communication modes.
+- **Three Communication Modes** – `kent` (default homie), `assistant` (structured helper), `pro` (step-by-step reasoning, DM only).
+- **Message Splitting** – When enabled, the bot naturally breaks replies into multiple short messages (via `!separate` marker, with a sentence-boundary fallback) for a live, human texting feel.
+- **Emoji Reactions** – The bot can react to the user's message with an emoji instead of (or in addition to) a text reply, on **both** platforms.
+- **Emoji Discipline** – In `kent` mode the bot keeps emojis to an absolute minimum and the output is post-filtered (only 🍷🗿 survive).
 - **Remote Administration** – Built-in logging system that allows owners to retrieve `bot.log` files and live stdout directly via chat commands.
 - **Automated Engagement** – Periodic auto-posting of "random thoughts" to keep the chat alive.
 - **Donation System** – Support via Telegram Stars and DonationAlerts integration with a cross-platform leaderboard.
-- **🔄 Auto-Update** – Authorized users can trigger a `git pull` and automatic restart directly from Discord (`кульш обновись`). Requires systemd setup.
-- **🆕 Looksmaxxing Analysis** – Strict facial aesthetics evaluation.  
-  Upload a photo (in Discord or Telegram) with the `кульш looksmaxxing` command and receive:
+- **Credits System** – Daily per-user credits that gate the heavier tools (archive editing).
+- **🔄 Auto-Update** – Authorized users can trigger a `git pull` and automatic restart directly from Discord (`кульш обновись`), with automatic rollback if a new commit fails the smoke check. Requires systemd setup.
+- **🆕 Looksmaxxing Analysis** – Strict facial aesthetics evaluation.
+  Upload a photo (in Discord or Telegram) with the `кульш psl` command and receive:
   - Objective **PSL rating** (1.0–8.0) and exact **tier** (Sub3 to True Adam / True Eve) with tier distribution chart
   - "You outperform X% of people" percentile based on normal distribution
   - Detailed breakdown of skin, eyes, jawline, bloat, bone structure, symmetry, canthal tilt
   - List of **strengths** and **weaknesses** (no sugarcoating)
   - Optional **improvement advice** (softmaxxing / hardmaxxing)
+  - Graceful handling of **non-human images** — no more "Failed to parse AI response" error, just a friendly nudge
   - Stylish **infographic** with dark/light theme support and English/Russian language settings
+- **🆕 Femboy Rate** – A dedicated softness/femininity rating on the FMB scale (1.0–10.0) with its own tier ladder, infographic and battle mode.
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Core:** Python 3.10+
-- **AI Engine:** DarkAPI (`glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `gpt-6-luna`) first, then NeutralBeats (`glm-5.3-flash`, `deepseek-v4.1-flash`, `kimi-k3`, `deepseek-v4-pro`), then Google Generative AI (Gemini 3.8 Flash, Gemini 3.7 Flash, Gemini 3.6 Flash, Gemini 3.5 Flash, Gemini 3.5 Flash Lite, Gemini 2.5 Flash, Gemini 2.5 Flash Lite). A successful response is not sent to the next provider.
+- **Core:** Python 3.14+
+- **AI Engine (priority cascade):**
+  - **DarkAPI** (`glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `gpt-6-luna`)
+  - **NeutralBeats** (`glm-5.3-flash`, `deepseek-v4.1-flash`, `kimi-k3`, `deepseek-v4-pro`, `gpt-6-luna`, `claude-haiku-5-5`, `gpt-6.1-sol`)
+  - **Google Generative AI / Gemini** (Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash, 3.5 Flash, 3.5 Flash Lite, 2.5 Flash, 2.5 Flash Lite)
+  - A successful response is **not** passed to the next provider. Models shared between DarkAPI and NeutralBeats are tried on both, then skipped for Gemini. `kimi-k3`, `claude-haiku-5-5` and `gpt-6.1-sol` are NeutralBeats-only.
 - **Frameworks:** `pyTelegramBotAPI` (Async), `discord.py` 2.x
 - **Voice Processing:** `discord-ext-voice-receive`, `SpeechRecognition`, `pydub`
 - **Audio/Networking:** `FFmpeg`, `aiohttp`, `edge-tts`
-- **Image Processing:** `Pillow` (infographic generation for looksmaxxing reports)
+- **Image Processing:** `Pillow` (infographic generation for looksmaxxing / femboy reports)
 - **Donations:** `python-socketio` (DonationAlerts listener)
 - **Logging:** `RotatingFileHandler` for automated log management.
 
@@ -89,11 +102,18 @@ DONATIONALERTS_TOKEN=your_donationalerts_token
 REPO_PATH=/path/to/bot/folder
 ```
 
-**Note:** `DARKAPI_API_KEY` is optional and is tried first. `NEUTRALBEATS_API_KEY` is required. Shared models (`glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4-pro`) try DarkAPI, then NeutralBeats, then Gemini. `kimi-k3` skips DarkAPI and starts at NeutralBeats. `gpt-6-luna` is DarkAPI-only and falls through to Gemini. `AI_KEY` is a Gemini fallback. Use `AI_KEY_1`, `AI_KEY_2`, `AI_KEY_3` for the Gemini multi-key fallback. A successful response stops the chain; later providers are not called.
+**Notes on the AI cascade:**
+- `DARKAPI_API_KEY` is optional and is tried first. `NEUTRALBEATS_API_KEY` is required.
+- Shared models (`glm-5.3-flash`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `gpt-6-luna`) try DarkAPI → NeutralBeats → Gemini.
+- `kimi-k3`, `claude-haiku-5-5`, `gpt-6.1-sol` start at NeutralBeats and fall through to Gemini.
+- `AI_KEY` is a Gemini fallback. Use `AI_KEY_1`, `AI_KEY_2`, `AI_KEY_3` for the Gemini multi-key fallback.
+- A successful response stops the chain; later providers are not called.
 
 ### 4. Launch
 ```bash
 python -m src.app
+# or, equivalently
+python kulsh.py
 ```
 
 ---
@@ -149,24 +169,129 @@ sudo systemctl restart kulsh      # Manual restart
 sudo journalctl -u kulsh -f       # Live logs
 ```
 
+The `кульш обновись` command performs a `git fetch` + `git pull --ff-only`, then runs a syntax + import **smoke check** on the result. If the new code fails, the bot automatically rolls back to the last working commit and keeps running.
+
 ---
 
 ## 🎮 Commands
 
-| Command | Platform | Description |
-|---------|----------|-------------|
-| `кульш [текст]` | Both | General interaction – chat, ask questions, get roasted. |
-| `кульш настройки` | Both | View or change user settings (language, theme). |
-| `кульш настройки язык ru/en` | Both | Set infographic language (Russian/English). |
-| `кульш настройки тема dark/light` | Both | Set infographic theme (dark/light). |
-| `кульш донаты` | Both | Show top donators leaderboard. |
-| `кульш зайди в войс` | Discord | Summons the bot to your voice channel (starts listening with 65% response chance). |
-| `кульш скажи в войсе [текст]` | Discord | Make the bot speak in voice using neural TTS. |
-| `кульш выйди из войса` | Discord | Disconnects the bot from voice. |
-| `кульш логи` | Discord | (Authorized only) Sends the current `bot.log` file to the chat. |
-| `кульш обновись` | Discord | (Authorized only) Runs `git pull` and auto-restarts via systemd if updates found. |
-| `кульш серия` | Discord | Sends a streak reminder to a designated user. |
-| **🆕 `кульш looksmaxxing`** | Both | **Facial aesthetics analysis.**<br/>Send with an attached photo to get a full PSL breakdown and infographic.<br/>Add `совет` or `advice` in the caption for practical tips. |
+### Telegram — slash commands
+| Command | Description |
+|---------|-------------|
+| `/start` | Greeting + start keyboard. |
+| `/menu` | Interactive menu with all sections. |
+| `/help` | Full command list. |
+| `/status` | Bot status (uptime, latency, mode). |
+| `/donate` | Support the project. |
+| `/donate_stars <N>` | Donate via Telegram Stars (invoice). |
+| `/credits` | Your daily credits balance. |
+| `/togglepremiumfunctionsadmin` | (Owner only) Toggle premium features. |
+
+### Telegram — text commands
+| Command | Description |
+|---------|-------------|
+| `кульш [текст]` | General interaction – chat, ask questions, get roasted. |
+| `кульш конфиг` / `кульш настройки` | Open the inline settings panel. |
+| `кульш статус` | Bot status. |
+| `кульш поиск <запрос>` / `кульш найди <запрос>` | Web search with an AI summary. |
+| `кульш график <описание>` | Generate an infographic (photo attachment supported). |
+| `кульш аватарка` | Describe a user's avatar. |
+| `кульш вспомни медиа [N]` | Recall and describe recent media (`!recall_media`). |
+| `кульш логи` | (Admins/owner) Send the current `bot.log`. |
+| `кульш донаты` | Top donators leaderboard. |
+| `кульш psl` / `кульш psl совет` | Looksmaxxing analysis (needs a photo). |
+| `кульш баттл` / `кульш battle` | Two-photo PSL battle (send as an album). |
+| `фембой рейт` / `femboy rate` | Femboy Rate analysis (needs a photo). |
+| `фембой баттл` / `femboy battle` | Two-photo femboy battle (send as an album). |
+
+### Discord — slash commands
+| Command | Description |
+|---------|-------------|
+| `/start` | Greeting message. |
+| `/menu` | Interactive menu. |
+| `/help` | Full command list. |
+| `/status` | Bot status. |
+| `/config [scope]` | View / change channel settings (`self` / `shared`, admin only). |
+| `/donate` | Support the project. |
+| `/credits` | Credits balance. |
+| `/avatar [user]` | Describe an avatar. |
+| `/recall [count]` | Recall and describe recent media. |
+| `/search <query>` | Web search with an AI summary. |
+| `/chart <description>` | Generate an infographic. |
+| `/psl <image> [advice]` | Looksmaxxing analysis. |
+| `/battle <image1> <image2>` | Two-photo PSL battle. |
+| `/femboy <image> [advice]` | Femboy Rate analysis. |
+| `/femboy-battle <image1> <image2>` | Two-photo femboy battle. |
+| `/groupinfo` | Info about the current server. |
+| `/userinfo [user]` | Info about a user. |
+| `/logs` | (Admins) Send the current `bot.log`. |
+
+### Discord — text commands
+| Command | Description |
+|---------|-------------|
+| `кульш [текст]` | General interaction. |
+| `кульш конфиг` / `кульш настройки` | View / change channel settings. |
+| `кульш обновись` | (Authorized) `git pull` + auto-restart with rollback. |
+| `кульш статус` | Bot status. |
+| `кульш поиск <запрос>` | Web search. |
+| `кульш график <описание>` | Generate an infographic. |
+| `кульш аватарка` | Describe an avatar. |
+| `кульш донаты` | Top donators leaderboard. |
+| `кульш логи` | (Authorized) Send `bot.log`. |
+| `кульш зайди в войс` | Summon to your voice channel (starts listening). |
+| `кульш выйди из войса` | Disconnect from voice. |
+| `кульш psl`, `кульш баттл`, `фембой рейт`, `фембой баттл` | Same ratings as in Telegram. |
+
+### In-chat settings (`кульш конфиг <параметр> <значение>`)
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `область` / `scope` | `для_себя` / `для_всех` | Per-user or shared-per-channel config (Discord admin only). |
+| `язык` / `language` | `ru` / `en` | UI and infographic language. |
+| `тема` / `theme` | `тёмная` / `светлая` | Infographic theme. |
+| `режим` / `mode` | `кент` / `ассистент` / `pro` | Communication mode. |
+| `модель` / `model` | `<номер>` / `авто` | Force a specific model or auto-cascade. |
+| `температура` / `temperature` | `0.0–2.0` | Sampling temperature. |
+| `разбивка` / `split` | `вкл` / `выкл` | Message splitting. |
+| `реакции` / `reactions` | `вкл` / `выкл` | Emoji reactions. |
+| `стикеры` / `stickers` | `вкл` / `выкл` | Stickers / GIFs. |
+| `автоответ` / `autoreply` | `вкл` / `выкл` | Random observer replies. |
+| `рандом` / `random` | `вкл` / `выкл` | Periodic random posts. |
+| `поиск` / `search` | `вкл` / `выкл` | Web search availability. |
+| `промпт` / `prompt` | `<текст>` / `сброс` | Custom mandatory prompt. |
+
+> **Note:** `разбивка` (Split) and `стриминг` (Streaming) are mutually exclusive.
+
+---
+
+## 🤖 AI Utility Markers
+
+The bot's own responses can contain invisible utility markers that the bot strips before sending. The model uses them to trigger built-in actions:
+
+| Marker | Action |
+|--------|--------|
+| `!react:<emoji>` | React to the user's message (e.g. `!react:👍🔥`). |
+| `!why:<text>` | Optional note stored in memory alongside `!react`. |
+| `!separate` | Split this reply into several messages. |
+| `!search <query>` | Perform a web search and continue with the results. |
+| `!recall_media` / `!recall_media:ID` | Recall and describe the last (or a specific) media. |
+| `!avatar` | Describe the user's avatar. |
+| `!sticker` / `!gif` | Send a sticker / GIF. |
+| `!group_info` / `!user_info[:id]` | Fetch group / user info. |
+| `!chart` + JSON block | Render an infographic (premium). |
+
+**Reactions now work reliably:** the parser accepts `!react:👍`, `!react: 👍`, `[реакция 😂]`, `(реакция: 🗿)` and similar variants, applies the correct emoji via the platform API, and strips any stray marker so it never leaks into the chat as raw text.
+
+---
+
+## 💬 Communication Modes
+
+| Mode | Description |
+|------|-------------|
+| `kent` | Default homie mode. Short, casual, human-like. Emojis almost never; only 🍷🗿 occasionally and only when it fits. |
+| `assistant` | Structured helper. Headings and lists where appropriate, still friendly. |
+| `pro` | Step-by-step reasoning and self-checking. Available **only in Telegram DMs**. |
+
+In `kent` mode the message length adapts to the conversation: a one-liner for a quick joke, a normal human answer for a serious question, and — when splitting is on — up to 2–3 short messages for a longer train of thought.
 
 ---
 
@@ -177,14 +302,15 @@ The bot evaluates faces using a strict, objective AI analyst persona. The PSL sc
 ### Tier Distribution
 | Tier | PSL Range | Percentile |
 |------|-----------|------------|
-| SUB 3 | 1.0 – 2.9 | ~2.3% |
-| SUB 5 | 3.0 – 4.9 | ~13.6% |
-| LTN / LTB | 5.0 – 5.5 | ~10.0% |
+| SUB 3 | 1.0 – 2.4 | ~2.3% |
+| SUB 5 | 2.5 – 3.9 | ~13.6% |
+| LTN / LTB | 4.0 – 5.5 | ~10.0% |
 | MTN / MTB | 5.6 – 6.3 | ~19.2% |
-| HTN / HTB | 6.4 – 7.0 | ~19.2% |
+| HTN / HTB | 6.4 – 6.9 | ~19.2% |
 | CHADLITE / STACYLITE | 7.0 – 7.4 | ~13.6% |
-| CHAD / STACY | 7.5 – 7.7 | ~10.0% |
-| TRUE ADAM / TRUE EVE | 7.8 – 8.0 | ~2.3% |
+| CHAD / STACY | 7.5 – 7.6 | ~10.0% |
+| ADAMLITE / EVELITE | 7.7 – 7.8 | ~2.3% |
+| TRUE ADAM / TRUE EVE | 7.9 – 8.0 | ~2.3% |
 
 ### Analysis Includes
 - Gender detection (Male/Female with appropriate tier naming)
@@ -193,6 +319,46 @@ The bot evaluates faces using a strict, objective AI analyst persona. The PSL sc
 - Tier distribution bar chart with highlighted current tier
 - Visual infographic with profile photo, metrics table, pros/cons list
 - Optional practical looksmaxxing advice (softmaxxing/hardmaxxing)
+- **Non-human images** (animals, illustrations, objects) return a friendly message instead of a parsing error
+
+---
+
+## 💐 Femboy Rate System
+
+A separate rating for softness / femininity on the **FMB scale (1.0–10.0)**:
+
+| Tier | FMB Range |
+|------|-----------|
+| CHAD | 1.0 – 2.4 |
+| SIGMA | 2.5 – 3.9 |
+| NORMIE | 4.0 – 5.4 |
+| SOFTBOY / SOFTGIRL | 5.5 – 6.4 |
+| CUTIE | 6.5 – 7.4 |
+| FEMBOY / FEMGIRL | 7.5 – 8.4 |
+| TWINK | 8.5 – 9.2 |
+| ULTRAFEM | 9.3 – 9.7 |
+| GODDESS | 9.8 – 10.0 |
+
+Metrics: softness, hair, style, build, expression, skin, charm, voice vibe. Includes its own infographic and two-photo battle mode.
+
+---
+
+## 💎 Credits
+
+Each user gets **500 credits per day** (reset daily, MSK). Heavier tools consume credits:
+
+| Action | Cost |
+|--------|------|
+| Archive edit (send a `.zip` in DM) | 500 |
+| Safe console command | 25 |
+
+---
+
+## 🧰 DM Tools (Telegram)
+
+Send the bot a file in a private chat:
+- **`.zip` archive** — the bot unpacks it, lets the AI edit the files according to your request, repacks, and returns the result.
+- **Text file** — the bot reads it and answers your question about its contents.
 
 ---
 

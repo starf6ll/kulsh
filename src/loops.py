@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.4
+# Kulsh GPT | v2.45.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -30,6 +30,8 @@ from src.util import (
     memory_to_messages,
     process_ai_response,
     save_user_configs,
+    scrub_stray_markers,
+    strip_chat_emojis,
     JsonDict,
 )
 
@@ -158,6 +160,10 @@ async def random_post_loop() -> None:
                 continue
             segments, markers = process_ai_response(answer, separate_enabled=True)
             for seg in segments:
+                seg = scrub_stray_markers(seg)
+                seg = strip_chat_emojis(seg)
+                if not seg:
+                    continue
                 await send_tg_html(TG_TARGET_CHAT, seg)
                 add_bot_memory(chat_key, seg)
             for m in markers:
@@ -186,9 +192,13 @@ async def series_reminder_loop() -> None:
                                         chat_id=DS_SERIES_CHANNEL_ID, user_id=0, platform="ds")
             segments, _ = process_ai_response(answer, separate_enabled=True)
             if segments:
-                await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {segments[0]}")
+                first = strip_chat_emojis(scrub_stray_markers(segments[0]))
+                if first:
+                    await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {first}")
                 for seg in segments[1:]:
-                    await channel.send(seg)
+                    seg = strip_chat_emojis(scrub_stray_markers(seg))
+                    if seg:
+                        await channel.send(seg)
         except Exception as e:
             logger.error(f"series_reminder_loop: {e}")
         await asyncio.sleep(86400)

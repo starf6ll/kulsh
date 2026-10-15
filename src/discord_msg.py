@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.42.1
+# Kulsh GPT | v2.45.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -408,6 +408,9 @@ async def on_message(message: discord.Message) -> None:
                 ai_data = await get_looksmaxxing_data(
                     psl_bytes, include_advice, lang=lang, chat_id=chat_id, user_id=user_id, platform="ds",
                 )
+                if ai_data.get("not_a_face"):
+                    await message.reply(ai_data.get("message", tr(lang, "psl_not_a_face")))
+                    return
                 if "error" in ai_data:
                     await message.reply(ai_data['error'])
                     return

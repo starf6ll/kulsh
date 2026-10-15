@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.42.1
+# Kulsh GPT | v2.45.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 

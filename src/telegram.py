@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.43.1
+# Kulsh GPT | v2.45.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -76,12 +76,14 @@ from src.util import (
     cb_id,
     clean_extra_text,
     clean_json_text,
+    extract_reaction_and_why,
     human_uptime,
     markdown_like_to_telegram_html,
     process_ai_response,
     save_user_configs,
     scrub_stray_markers,
     split_emojis,
+    strip_chat_emojis,
     tr,
     tg_msg,
     add_bot_memory,
@@ -104,7 +106,6 @@ from src.util import (
     save_long_term_memory,
 )
 import src.util as state
-
 tg_bot: Any = None
 
 
@@ -181,16 +182,11 @@ async def _handle_reaction_markers(
     cfg: dict[str, Any],
 ) -> tuple[str, list[str]]:
     if not cfg.get("reactions_enabled", True):
-        cleaned = REACT_PATTERN.sub(' ', text)
-        cleaned = WHY_PATTERN.sub(' ', cleaned)
-        return cleaned.strip(), []
-    m = REACT_PATTERN.search(text or "")
-    why_m = WHY_PATTERN.search(text or "")
-    if not m:
+        cleaned, _, _ = extract_reaction_and_why(text)
+        return cleaned, []
+    cleaned, emojis_str, why_text = extract_reaction_and_why(text or "")
+    if not emojis_str:
         return text, []
-
-    emojis_str = m.group(1)
-    why_text = why_m.group(1).strip() if why_m else ""
 
     target_msg_id = message.message_id
     if message.reply_to_message and message.reply_to_message.message_id:
@@ -203,10 +199,6 @@ async def _handle_reaction_markers(
             target_from_bot = True
     if target_msg_id == message.message_id and message.from_user and bot_id and message.from_user.id == bot_id:
         target_from_bot = True
-
-    cleaned = REACT_PATTERN.sub(' ', text)
-    cleaned = WHY_PATTERN.sub(' ', cleaned)
-    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
 
     if target_from_bot:
         logger.info("Пропускаю реакцию: цель — собственное сообщение бота")
@@ -1251,6 +1243,8 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
 
     for i, seg in enumerate(all_segments):
         seg = scrub_stray_markers(seg)
+        if cfg.get("communication_mode", "kent") == "kent":
+            seg = strip_chat_emojis(seg)
         if not seg:
             continue
         try:
@@ -1335,6 +1329,8 @@ async def maybe_reply_to_old_message_tg(message: types.Message, chat_id: int, us
             old_msg_id = old.get("message_id")
             for i, seg in enumerate(segments):
                 seg = scrub_stray_markers(seg)
+                if cfg.get("communication_mode", "kent") == "kent":
+                    seg = strip_chat_emojis(seg)
                 if not seg:
                     continue
                 try:

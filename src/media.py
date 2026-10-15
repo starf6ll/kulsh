@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.42.0
+# Kulsh GPT | v2.45.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -369,6 +369,10 @@ async def handle_tg_media(message: types.Message) -> None:
             ai_data = await get_looksmaxxing_data(
                 img_bytes, include_advice, lang=lang, chat_id=chat_id, user_id=user_id, platform="tg",
             )
+            if ai_data.get("not_a_face"):
+                await _tg().tg_bot.edit_message_text(ai_data.get("message", tr(lang, "psl_not_a_face")),
+                                                     chat_id, status.message_id)
+                return
             if "error" in ai_data:
                 await _tg().tg_bot.edit_message_text(ai_data['error'], chat_id, status.message_id)
                 return

@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.0
+# Kulsh GPT | v2.45.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -451,6 +451,50 @@ async def create_battle_infographic(
 # ============================================================
 # PSL AI DATA
 # ============================================================
+def _lookslike_not_a_face(data: JsonDict) -> bool:
+    """Определяет, что на фото не человек (модель вернула N/A / 0.0 / спец-маркеры)."""
+    tier = str(data.get("tier", "")).strip().upper()
+    gender = str(data.get("gender", "")).strip().upper()
+    if tier in ("N/A", "NA", "НЕТ", "-", "") and gender in ("N/A", "NA", "НЕТ", "-", ""):
+        return True
+    cons = data.get("cons")
+    if isinstance(cons, list):
+        joined = " ".join(str(c).lower() for c in cons)
+        if ("не человек" in joined or "not a human" in joined or "not human" in joined
+                or "иллюстрац" in joined or "animal" in joined or "object" in joined):
+            return True
+    summary = str(data.get("summary", "")).lower()
+    if "не человек" in summary or "not a human" in summary or "not human" in summary:
+        return True
+    try:
+        if float(data.get("psl", 0)) <= 0.0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def _not_a_face_result(lang: str, data: JsonDict) -> dict[str, Any]:
+    """Дружелюбный ответ вместо ошибки парсинга, когда на фото не человек."""
+    cons = data.get("cons")
+    hint = ""
+    if isinstance(cons, list) and cons:
+        hint = "; ".join(str(c) for c in cons[:2])
+    elif data.get("summary"):
+        hint = str(data["summary"])[:160]
+    if lang == "ru":
+        msg = ("🤔 на фото не человек — тут нечего оценивать по PSL. "
+               "кин настоящую фотку лица, и разберём по полочкам.")
+        if hint:
+            msg += f"\n\n> {hint}"
+    else:
+        msg = ("🤔 that's not a human face — nothing to rate on the PSL scale. "
+               "Send a real photo of a face and we'll break it down.")
+        if hint:
+            msg += f"\n\n> {hint}"
+    return {"not_a_face": True, "message": msg}
+
+
 async def get_looksmaxxing_data(
     photo_bytes: bytes,
     include_advice: bool,
@@ -496,15 +540,20 @@ async def get_looksmaxxing_data(
     )
     try:
         data = json_dict(json.loads(clean_json_text(raw)))
-        required = ("gender", "psl", "tier", "potential", "skin", "eyes", "jawline", "bloat",
-                    "hair", "bone_structure", "symmetry", "canthal_tilt", "pros", "cons", "summary")
-        if not all(data.get(key) not in (None, "", "N/A") for key in required):
-            logger.error(f"Looksmaxxing response is incomplete: {raw[:300]}")
-            return {"error": tr(lang, "ai_json_fail")}
-        return data
     except (json.JSONDecodeError, TypeError):
         logger.error(f"Looksmaxxing JSON decode: {raw[:200]}")
         return {"error": tr(lang, "ai_json_fail")}
+
+    if _lookslike_not_a_face(data):
+        return _not_a_face_result(lang, data)
+
+    required = ("gender", "psl", "tier", "potential", "skin", "eyes", "jawline", "bloat",
+                "hair", "bone_structure", "symmetry", "canthal_tilt", "pros", "cons", "summary")
+    missing = [key for key in required if data.get(key) in (None, "", "N/A")]
+    if missing:
+        logger.error(f"Looksmaxxing response is incomplete ({missing}): {raw[:300]}")
+        return {"error": tr(lang, "ai_json_fail")}
+    return data
 
 
 async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, Any]:
