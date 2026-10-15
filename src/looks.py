@@ -7,7 +7,7 @@
 import json
 import os
 from io import BytesIO
-from typing import Any
+from typing import Any, cast
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -81,29 +81,29 @@ def block_height(lines: list[str], font: Font, line_spacing: int, draw: ImageDra
 # ============================================================
 async def create_infographic(photo_bytes: bytes, data: JsonDict, theme: str = "dark", lang: str = "en") -> BytesIO:
     if lang == "ru":
-        TITLE = "ОТЧЁТ LOOKSMAXXING"
-        PSL_LABEL = "PSL"
-        STRENGTHS = "ПРЕИМУЩЕСТВ."
-        WEAKNESSES = "НЕДОСТАТКИ"
-        FULL_ANALYSIS = "Полный анализ в сообщении"
-        METRIC_NAMES = {"skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
+        title_text = "ОТЧЁТ LOOKSMAXXING"
+        psl_label = "PSL"
+        strengths_label = "ПРЕИМУЩЕСТВ."
+        weaknesses_label = "НЕДОСТАТКИ"
+        full_analysis_text = "Полный анализ в сообщении"
+        metric_names = {"skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
                         "hair": "Волосы", "bone_structure": "Костная структура", "symmetry": "Симметрия",
                         "canthal_tilt": "Кант. наклон"}
-        BETTER_THAN = "Вы превосходите {}% людей"
-        DISTRIBUTION_CAPTION = "Распределение тиров"
-        POTENTIAL_LABEL = "Потенциал:"
+        better_than_fmt = "Вы превосходите {}% людей"
+        distribution_caption = "Распределение тиров"
+        potential_label = "Потенциал:"
     else:
-        TITLE = "LOOKSMAXXING REPORT"
-        PSL_LABEL = "PSL"
-        STRENGTHS = "STRENGTHS"
-        WEAKNESSES = "WEAKNESSES"
-        FULL_ANALYSIS = "Full analysis in the message"
-        METRIC_NAMES = {"skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
+        title_text = "LOOKSMAXXING REPORT"
+        psl_label = "PSL"
+        strengths_label = "STRENGTHS"
+        weaknesses_label = "WEAKNESSES"
+        full_analysis_text = "Full analysis in the message"
+        metric_names = {"skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
                         "hair": "Hair", "bone_structure": "Bone structure", "symmetry": "Symmetry",
                         "canthal_tilt": "Canthal tilt"}
-        BETTER_THAN = "You outperform {}% of people"
-        DISTRIBUTION_CAPTION = "Tier distribution"
-        POTENTIAL_LABEL = "Potential:"
+        better_than_fmt = "You outperform {}% of people"
+        distribution_caption = "Tier distribution"
+        potential_label = "Potential:"
 
     if theme == "light":
         bg_color = "#F9F9FB"
@@ -139,7 +139,7 @@ async def create_infographic(photo_bytes: bytes, data: JsonDict, theme: str = "d
     list_font = load_font(17)
     font_tier_label = load_font(13)
 
-    draw.text((40, 25), TITLE, fill=text_tertiary, font=font_title)
+    draw.text((40, 25), title_text, fill=text_tertiary, font=font_title)
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
 
     user_img = Image.open(BytesIO(photo_bytes)).convert("RGBA")
@@ -175,7 +175,7 @@ async def create_infographic(photo_bytes: bytes, data: JsonDict, theme: str = "d
         current_tier_idx = 4
 
     better_than = max(0.1, min(99.9, (psl_val - 1) / 7 * 100))
-    better_text = BETTER_THAN.format(round(better_than, 1))
+    better_text = better_than_fmt.format(round(better_than, 1))
     photo_bottom = photo_y + rounded.size[1]
     draw.text((40, photo_bottom + 20), better_text, fill=text_secondary, font=font_sub)
 
@@ -199,14 +199,14 @@ async def create_infographic(photo_bytes: bytes, data: JsonDict, theme: str = "d
         tw = tb[2] - tb[0]
         draw.text(((x_start + x_end) / 2 - tw / 2, chart_y + chart_height + 4),
                   tier_short, fill=text_secondary, font=font_tier_label)
-    draw.text((40, chart_y + chart_height + 30), DISTRIBUTION_CAPTION, fill=text_tertiary, font=font_small)
+    draw.text((40, chart_y + chart_height + 30), distribution_caption, fill=text_tertiary, font=font_small)
 
     start_x = 510
     right_top_y = 100
-    draw.text((start_x, right_top_y), PSL_LABEL, fill=text_tertiary, font=font_sub)
+    draw.text((start_x, right_top_y), psl_label, fill=text_tertiary, font=font_sub)
     draw.text((start_x, right_top_y + 35), f"{psl_score}", fill=text_primary, font=font_psl_num)
     draw.text((start_x, right_top_y + 110), f"{tier_name} · {gender}", fill=accent, font=font_sub)
-    draw.text((start_x, right_top_y + 145), f"{POTENTIAL_LABEL} {potential}", fill=text_secondary, font=font_small)
+    draw.text((start_x, right_top_y + 145), f"{potential_label} {potential}", fill=text_secondary, font=font_small)
 
     psl_bar_x, psl_bar_y = start_x, right_top_y + 200
     psl_bar_w, psl_bar_h = 400, 20
@@ -239,7 +239,7 @@ async def create_infographic(photo_bytes: bytes, data: JsonDict, theme: str = "d
     line_spacing = 2
     current_y = float(psl_bar_y + psl_bar_h + 25)
     for key, val_str in metrics_mapping:
-        title = METRIC_NAMES.get(key, key)
+        title = metric_names.get(key, key)
         tb = draw.textbbox((0, 0), title, font=font_text)
         title_h = tb[3] - tb[1]
         val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
@@ -262,11 +262,15 @@ async def create_infographic(photo_bytes: bytes, data: JsonDict, theme: str = "d
         raw_pros = [raw_pros]
     if isinstance(raw_cons, str):
         raw_cons = [raw_cons]
-    pros = [add_bullet(str(p)) for p in raw_pros] if isinstance(raw_pros, list) else []
-    cons = [add_bullet(str(c)) for c in raw_cons] if isinstance(raw_cons, list) else []
+    pros: list[str] = []
+    cons: list[str] = []
+    if isinstance(raw_pros, list):
+        pros = [add_bullet(str(p)) for p in cast(list[object], raw_pros)]
+    if isinstance(raw_cons, list):
+        cons = [add_bullet(str(c)) for c in cast(list[object], raw_cons)]
     col_y = current_y + 20
-    draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
-    draw.text((start_x + 220, col_y), WEAKNESSES, fill=weak_color, font=font_sub)
+    draw.text((start_x, col_y), strengths_label, fill=accent, font=font_sub)
+    draw.text((start_x + 220, col_y), weaknesses_label, fill=weak_color, font=font_sub)
     col_width = 200
     line_height = 26
     list_start_y = col_y + 38
@@ -281,9 +285,9 @@ async def create_infographic(photo_bytes: bytes, data: JsonDict, theme: str = "d
         return cy
 
     end_left = render_list(pros, start_x + 10, int(list_start_y), text_primary)
-    end_right = render_list(cons, start_x + 230, int(list_start_sentinel := list_start_y), text_primary)
+    end_right = render_list(cons, start_x + 230, int(list_start_y), text_primary)
     max_y = max(end_left, end_right)
-    draw.text((40, max_y + 30), FULL_ANALYSIS, fill=text_tertiary, font=font_small)
+    draw.text((40, max_y + 30), full_analysis_text, fill=text_tertiary, font=font_small)
     out = BytesIO()
     image.save(out, format="PNG")
     out.seek(0)
@@ -542,29 +546,29 @@ async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, A
 async def create_femboy_infographic(photo_bytes: bytes, data: JsonDict,
                                     theme: str = "dark", lang: str = "ru") -> BytesIO:
     if lang == "ru":
-        TITLE = "ОТЧЁТ FEMBOY RATE"
-        FMB_LABEL = "FMB"
-        STRENGTHS = "ПРЕИМУЩЕСТВ."
-        WEAKNESSES = "НЕДОСТАТКИ"
-        FULL_ANALYSIS = "Полный анализ в сообщении"
-        METRIC_NAMES = {"softness": "Мягкость", "hair": "Волосы", "style": "Стиль",
+        title_text = "ОТЧЁТ FEMBOY RATE"
+        fmb_label = "FMB"
+        strengths_label = "ПРЕИМУЩЕСТВ."
+        weaknesses_label = "НЕДОСТАТКИ"
+        full_analysis_text = "Полный анализ в сообщении"
+        metric_names = {"softness": "Мягкость", "hair": "Волосы", "style": "Стиль",
                         "build": "Телосложение", "expression": "Выражение",
                         "skin": "Кожа", "charm": "Обаяние", "voice_vibe": "Вайб голоса"}
-        BETTER_THAN = "Вы нежнее {}% людей"
-        DISTRIBUTION_CAPTION = "Распределение FMB"
-        POTENTIAL_LABEL = "Потенциал:"
+        better_than_fmt = "Вы нежнее {}% людей"
+        distribution_caption = "Распределение FMB"
+        potential_label = "Потенциал:"
     else:
-        TITLE = "FEMBOY RATE REPORT"
-        FMB_LABEL = "FMB"
-        STRENGTHS = "STRENGTHS"
-        WEAKNESSES = "WEAKNESSES"
-        FULL_ANALYSIS = "Full analysis in the message"
-        METRIC_NAMES = {"softness": "Softness", "hair": "Hair", "style": "Style",
+        title_text = "FEMBOY RATE REPORT"
+        fmb_label = "FMB"
+        strengths_label = "STRENGTHS"
+        weaknesses_label = "WEAKNESSES"
+        full_analysis_text = "Full analysis in the message"
+        metric_names = {"softness": "Softness", "hair": "Hair", "style": "Style",
                         "build": "Build", "expression": "Expression",
                         "skin": "Skin", "charm": "Charm", "voice_vibe": "Voice vibe"}
-        BETTER_THAN = "Softer than {}% of people"
-        DISTRIBUTION_CAPTION = "FMB distribution"
-        POTENTIAL_LABEL = "Potential:"
+        better_than_fmt = "Softer than {}% of people"
+        distribution_caption = "FMB distribution"
+        potential_label = "Potential:"
 
     if theme == "light":
         bg_color = "#F9F9FB"
@@ -600,7 +604,7 @@ async def create_femboy_infographic(photo_bytes: bytes, data: JsonDict,
     list_font = load_font(17)
     font_tier_label = load_font(13)
 
-    draw.text((40, 25), TITLE, fill=text_tertiary, font=font_title)
+    draw.text((40, 25), title_text, fill=text_tertiary, font=font_title)
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
 
     user_img = Image.open(BytesIO(photo_bytes)).convert("RGBA")
@@ -617,7 +621,7 @@ async def create_femboy_infographic(photo_bytes: bytes, data: JsonDict,
     gender = data.get("gender", "N/A")
     potential = data.get("potential", "N/A")
     try:
-        fmb_val = max(1.0, min(10.0, float(fmb_score)))
+        fmb_val = max(1.0, min(10.0, float(str(fmb_score))))
     except (ValueError, TypeError):
         fmb_val = 1.0
 
@@ -637,7 +641,7 @@ async def create_femboy_infographic(photo_bytes: bytes, data: JsonDict,
         current_tier_idx = 4
 
     better_than = max(0.1, min(99.9, (fmb_val - 1) / 9 * 100))
-    better_text = BETTER_THAN.format(round(better_than, 1))
+    better_text = better_than_fmt.format(round(better_than, 1))
     photo_bottom = photo_y + rounded.size[1]
     draw.text((40, photo_bottom + 20), better_text, fill=text_secondary, font=font_sub)
 
@@ -662,14 +666,14 @@ async def create_femboy_infographic(photo_bytes: bytes, data: JsonDict,
         tw = tb[2] - tb[0]
         draw.text(((x_start + x_end) / 2 - tw / 2, chart_y + chart_height + 4),
                   tier_short, fill=text_secondary, font=font_tier_label)
-    draw.text((40, chart_y + chart_height + 30), DISTRIBUTION_CAPTION, fill=text_tertiary, font=font_small)
+    draw.text((40, chart_y + chart_height + 30), distribution_caption, fill=text_tertiary, font=font_small)
 
     start_x = 510
     right_top_y = 100
-    draw.text((start_x, right_top_y), FMB_LABEL, fill=text_tertiary, font=font_sub)
+    draw.text((start_x, right_top_y), fmb_label, fill=text_tertiary, font=font_sub)
     draw.text((start_x, right_top_y + 35), f"{fmb_score}", fill=text_primary, font=font_fmb_num)
     draw.text((start_x, right_top_y + 110), f"{tier_name} · {gender}", fill=accent, font=font_sub)
-    draw.text((start_x, right_top_y + 145), f"{POTENTIAL_LABEL} {potential}", fill=text_secondary, font=font_small)
+    draw.text((start_x, right_top_y + 145), f"{potential_label} {potential}", fill=text_secondary, font=font_small)
 
     psl_bar_x, psl_bar_y = start_x, right_top_y + 200
     psl_bar_w, psl_bar_h = 400, 20
@@ -702,7 +706,7 @@ async def create_femboy_infographic(photo_bytes: bytes, data: JsonDict,
     line_spacing = 2
     current_y = float(psl_bar_y + psl_bar_h + 25)
     for key, val_str in metrics_mapping:
-        title = METRIC_NAMES.get(key, key)
+        title = metric_names.get(key, key)
         tb = draw.textbbox((0, 0), title, font=font_text)
         title_h = tb[3] - tb[1]
         val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
@@ -725,11 +729,15 @@ async def create_femboy_infographic(photo_bytes: bytes, data: JsonDict,
         raw_pros = [raw_pros]
     if isinstance(raw_cons, str):
         raw_cons = [raw_cons]
-    pros = [add_bullet(str(p)) for p in raw_pros] if isinstance(raw_pros, list) else []
-    cons = [add_bullet(str(c)) for c in raw_cons] if isinstance(raw_cons, list) else []
+    pros: list[str] = []
+    cons: list[str] = []
+    if isinstance(raw_pros, list):
+        pros = [add_bullet(str(p)) for p in cast(list[object], raw_pros)]
+    if isinstance(raw_cons, list):
+        cons = [add_bullet(str(c)) for c in cast(list[object], raw_cons)]
     col_y = current_y + 20
-    draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
-    draw.text((start_x + 220, col_y), WEAKNESSES, fill=weak_color, font=font_sub)
+    draw.text((start_x, col_y), strengths_label, fill=accent, font=font_sub)
+    draw.text((start_x + 220, col_y), weaknesses_label, fill=weak_color, font=font_sub)
     col_width = 200
     line_height = 26
     list_start_y = col_y + 38
@@ -746,7 +754,7 @@ async def create_femboy_infographic(photo_bytes: bytes, data: JsonDict,
     end_left = render_list(pros, start_x + 10, int(list_start_y), text_primary)
     end_right = render_list(cons, start_x + 230, int(list_start_y), text_primary)
     max_y = max(end_left, end_right)
-    draw.text((40, max_y + 30), FULL_ANALYSIS, fill=text_tertiary, font=font_small)
+    draw.text((40, max_y + 30), full_analysis_text, fill=text_tertiary, font=font_small)
     out = BytesIO()
     image.save(out, format="PNG")
     out.seek(0)

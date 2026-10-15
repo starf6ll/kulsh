@@ -10,9 +10,9 @@ import os
 import shutil
 import tempfile
 import zipfile
-from typing import Any
+from typing import Any, cast
 
-import telebot
+from telebot import types as types
 from telebot.types import InputFile
 
 from src.ai import ask_ai_async
@@ -25,6 +25,7 @@ from src.util import (
     clean_json_text,
     get_user_config,
     logger,
+    JsonDict,
 
     tools_sessions,)
 
@@ -34,13 +35,13 @@ def _bot() -> Any:
     return tg.tg_bot
 
 
-async def reply_tg_html(message: telebot.types.Message, text: str) -> None:
+async def reply_tg_html(message: types.Message, text: str) -> None:
     from src import telegram as tg
     await tg.reply_tg_html(message, text)
 
 
 async def send_tg_ai_response(
-    message: telebot.types.Message,
+    message: types.Message,
     chat_id: int,
     user_id: int,
     answer: str,
@@ -61,7 +62,7 @@ def safe_join(base: str, rel: str) -> str | None:
 
 def list_files(base: str) -> list[str]:
     out: list[str] = []
-    for root, dirs, files in os.walk(base):
+    for root, _dirs, files in os.walk(base):
         for f in files:
             full = os.path.join(root, f)
             rel = os.path.relpath(full, base)
@@ -108,7 +109,7 @@ async def extract_archive(zip_path: str, dest_dir: str) -> list[str]:
 async def create_archive(source_dir: str, out_zip: str) -> None:
     def _do() -> None:
         with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for root, dirs, files in os.walk(source_dir):
+            for root, _dirs, files in os.walk(source_dir):
                 for f in files:
                     full = os.path.join(root, f)
                     rel = os.path.relpath(full, source_dir)
@@ -144,7 +145,7 @@ async def run_safe_command(base_dir: str, cmd: str) -> tuple[int, str]:
         return 1, f"ошибка: {e}"
 
 
-async def tool_edit_archive(message: telebot.types.Message, user_request: str,
+async def tool_edit_archive(message: types.Message, user_request: str,
                             archive_bytes: bytes, filename: str) -> None:
     if message.from_user is None:
         return
@@ -212,6 +213,7 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
             await _bot().edit_message_text(tr(lang, "tool_no_changes", summary),
                                            chat_id, status.message_id)
             return
+        new_files = cast(JsonDict, new_files)
 
         await _bot().edit_message_text(tr(lang, "tool_editing", len(new_files)),
                                        chat_id, status.message_id)
@@ -251,14 +253,14 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
         tools_sessions.pop(chat_id, None)
 
 
-async def tool_review_file(message: telebot.types.Message, user_request: str,
+async def tool_review_file(message: types.Message, user_request: str,
                            file_bytes: bytes, filename: str) -> None:
     if message.from_user is None:
         return
     user_id = message.from_user.id
     chat_id = message.chat.id
     cfg = get_user_config("tg", chat_id, user_id)
-    lang = cfg.get("language", "ru")
+    _lang = cfg.get("language", "ru")
     try:
         text = file_bytes.decode('utf-8', errors='replace')
     except Exception:

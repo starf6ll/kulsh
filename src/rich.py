@@ -9,7 +9,7 @@ import re
 from typing import Any, cast
 
 import aiohttp
-import telebot
+from telebot import types as types
 from telebot.types import InlineKeyboardMarkup
 
 from src.util import (
@@ -54,7 +54,7 @@ async def send_tg_html(chat_id: int, text: str, reply_to: int | None = None) -> 
                 logger.error(f"plain fallback fail: {e2}")
 
 
-async def reply_tg_html(message: telebot.types.Message, text: str) -> None:
+async def reply_tg_html(message: types.Message, text: str) -> None:
     await send_tg_html(message.chat.id, text, reply_to=message.message_id)
 
 
@@ -381,7 +381,7 @@ async def send_rich_message(
                 payload["reply_markup"] = markup
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TG_TOKEN}/sendRichMessage"
-            async with session.post(url, json=payload, timeout=30) as resp:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 body = await resp.text()
                 return resp.status, body
 
@@ -424,10 +424,10 @@ async def send_rich_message_returning_id(
     try:
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TG_TOKEN}/sendRichMessage"
-            async with session.post(url, json=payload, timeout=30) as resp:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 body = await resp.json()
                 if resp.status == 200 and body.get("ok"):
-                    res = body.get("result") or {}
+                    res = cast(JsonDict, body.get("result") or {})
                     mid = res.get("message_id")
                     if isinstance(mid, int):
                         return mid
@@ -458,7 +458,7 @@ async def edit_rich_message(
                 payload["reply_markup"] = markup
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText"
-            async with session.post(url, json=payload, timeout=30) as resp:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 body = await resp.text()
                 return resp.status, body
 
@@ -562,7 +562,7 @@ async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
     try:
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessageDraft"
-            async with session.post(url, json=payload, timeout=15) as resp:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 return resp.status == 200
     except Exception:
         return False

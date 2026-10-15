@@ -15,7 +15,7 @@ from typing import Any, cast
 
 import discord
 
-from src.ai import format_search_results, ask_ai_async, extract_memory, web_search, user_wants_chart
+from src.ai import format_search_results, ask_ai_async, extract_memory, web_search
 from src.charts import render_infographic
 from src.discord_cmds import (
     ds_handle_config,
@@ -35,13 +35,13 @@ from src.looks import (
 )
 from src.telegram import should_random_reply
 from src.util import (
+    JsonDict,
     perform_safe_git_update,
     voice_recognition_enabled,
     voice_recv_available,
     AudioSegment,
     tr,
     voice_client,
-    add_bot_memory,
     add_media_history,
     add_user_memory,
     download_image_bytes,
@@ -98,7 +98,7 @@ async def on_message(message: discord.Message) -> None:
     if message.author == dcmd.ds_bot.user:
         return
     guild = message.guild
-    is_dm = guild is None
+    is_dm = message.guild is None
     # ВАЖНО: chat_id всегда channel.id, чтобы совпадать с настройками.
     chat_id = message.channel.id
     user_id = message.author.id
@@ -224,10 +224,11 @@ async def on_message(message: discord.Message) -> None:
             if not isinstance(spec, dict):
                 await message.reply(tr(lang, "chart_error", "invalid JSON"))
                 return
+            spec_dict = cast(JsonDict, spec)
             try:
-                img = await render_infographic(spec, user_images=None)
+                img = await render_infographic(spec_dict, user_images=None)
                 await message.reply(file=discord.File(fp=img, filename="infographic.png"),
-                                    content=(spec.get("title") or tr(lang, "chart_built"))[:1900])
+                                    content=(spec_dict.get("title") or tr(lang, "chart_built"))[:1900])
             except Exception as e:
                 await message.reply(tr(lang, "chart_error", str(e)))
         return
@@ -298,7 +299,7 @@ async def on_message(message: discord.Message) -> None:
             voice_text_channels[guild.id] = message.channel
             await message.reply(tr(lang, "ds_voice_joined", voice_channel.name))
             if voice_recognition_enabled and voice_recv_available:
-                sink = RecognitionSink(dcmd.ds_bot, guild, message.channel)
+                sink = cast(Any, RecognitionSink)(dcmd.ds_bot, guild, message.channel)
                 cast(Any, vc).listen(sink)
                 setattr(vc, "_recognition_sink", sink)
         except Exception as e:
@@ -519,7 +520,7 @@ async def on_message(message: discord.Message) -> None:
 if voice_recognition_enabled and voice_recv_available:
     class RecognitionSink(voice_recv.AudioSink):  # type: ignore[misc]
         def __init__(self, bot: discord.Client, guild: discord.Guild, text_channel: discord.abc.Messageable) -> None:
-            super().__init__()
+            super().__init__()  # pyright: ignore[reportUnknownMemberType]
             self.bot = bot
             self.guild = guild
             self.text_channel = text_channel

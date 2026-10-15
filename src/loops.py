@@ -6,7 +6,7 @@
 
 import asyncio
 import random
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import discord
 import socketio
@@ -21,7 +21,6 @@ from src.util import (
     DS_SERIES_TARGET_USER_ID,
     TG_TARGET_CHAT,
     voice_enabled,
-    HandlerT,
     messageable,
     add_bot_memory,
     add_donation,
@@ -74,18 +73,18 @@ async def donation_alerts_listener() -> None:
     await ds_bot.wait_until_ready()
     sio = socketio.AsyncClient()
 
-    @cast(Callable[[HandlerT], HandlerT], sio.event)
+    @sio.event
     async def connect() -> None:
         logger.info("🔌 DonationAlerts подключён")
 
-    @cast(Callable[[HandlerT], HandlerT], sio.event)
+    @sio.event
     async def disconnect() -> None:
         logger.warning("🔌 DonationAlerts отключён")
 
-    @cast(Callable[[HandlerT], HandlerT], sio.on('donation'))
+    @sio.on('donation')
     async def on_donation(data: JsonDict) -> None:
         try:
-            amount = float(cast(Any, data.get('amount', 0)))
+            amount = float(data.get('amount', 0))
             currency = str(data.get('currency', 'RUB'))
             if currency != 'RUB':
                 return

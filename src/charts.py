@@ -144,7 +144,7 @@ def make_gradient_bg(w: int, h: int, c1: str, c2: str) -> Image.Image:
     for y in range(h):
         t = y / max(1, h - 1)
         base.putpixel((0, y), lerp_color(c1, c2, t))
-    return base.resize((w, h), Image.Resampling.BILINEAR)
+    return base.resize((w, h), Image.Resampling.BILINEAR)  # pyright: ignore[reportUnknownMemberType]
 
 
 def load_font(size: int, bold: bool = False) -> Font:
@@ -296,7 +296,7 @@ def render_bar_chart(canvas: Image.Image, box: tuple[int, int, int, int],
             for yy in range(bh):
                 t = yy / max(1, bh - 1)
                 bar_img.putpixel((0, yy), lerp_color(lighten(rgb, 1.2), rgb, t))
-            bar_img = bar_img.resize((bar_w, bh), Image.Resampling.BILINEAR)
+            bar_img = bar_img.resize((bar_w, bh), Image.Resampling.BILINEAR)  # pyright: ignore[reportUnknownMemberType]
             canvas.paste(bar_img, (bx, by))
         vs = f"{val:g}"
         vw, _ = text_size(draw, vs, font_val)
@@ -317,7 +317,7 @@ def render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
     draw = ImageDraw.Draw(canvas)
     title = str(spec.get("title") or "")
     xs = [str(v) for v in spec.get("x", [])]
-    series = spec.get("series", []) or []
+    series: list[Any] = spec.get("series") or []
     if not series:
         return
 
@@ -563,7 +563,6 @@ async def load_remote_image(url: str) -> Image.Image | None:
 def render_image_block(canvas: Image.Image, box: tuple[int, int, int, int],
                        img: Image.Image, theme: ChartTheme) -> None:
     x0, y0, x1, y1 = box
-    draw = ImageDraw.Draw(canvas)
     draw_card(canvas, box, theme)
     inner = 12
     ix0, iy0, ix1, iy1 = x0 + inner, y0 + inner, x1 - inner, y1 - inner
@@ -593,24 +592,25 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
     width = max(600, min(1600, width))
     title = str(spec.get("title") or "")
     subtitle = str(spec.get("subtitle") or "")
-    blocks = spec.get("blocks", []) or []
+    blocks: list[Any] = spec.get("blocks") or []
 
     # Preload images
     preloaded: dict[int, Image.Image] = {}
     for idx, block in enumerate(blocks):
         if not isinstance(block, dict):
             continue
-        if block.get("type") == "image":
-            src = block.get("source", "url")
+        b = cast(JsonDict, block)
+        if b.get("type") == "image":
+            src = b.get("source", "url")
             if src == "user" and user_images:
-                i = int(block.get("index", 0))
+                i = int(b.get("index", 0))
                 if 0 <= i < len(user_images):
                     try:
                         preloaded[idx] = Image.open(BytesIO(user_images[i])).convert("RGBA")
                     except Exception:
                         pass
-            elif src == "url" and block.get("url"):
-                img = await load_remote_image(str(block["url"]))
+            elif src == "url" and b.get("url"):
+                img = await load_remote_image(str(b["url"]))
                 if img is not None:
                     preloaded[idx] = img
 
@@ -631,28 +631,29 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
         if not isinstance(block, dict):
             heights.append(0)
             continue
-        t = block.get("type", "text")
+        b = cast(JsonDict, block)
+        t = b.get("type", "text")
         if t == "heading":
             heights.append(40)
         elif t == "text":
-            lines = wrap_lines(tmp_draw, str(block.get("text", "")), font_text, inner_w)
+            lines = wrap_lines(tmp_draw, str(b.get("text", "")), font_text, inner_w)
             heights.append(max(28, len(lines) * 22 + 8))
         elif t == "divider":
             heights.append(28)
         elif t == "bar":
-            heights.append(int(block.get("height", 340)))
+            heights.append(int(b.get("height", 340)))
         elif t == "line":
-            heights.append(int(block.get("height", 340)))
+            heights.append(int(b.get("height", 340)))
         elif t == "pie":
-            heights.append(int(block.get("height", 320)))
+            heights.append(int(b.get("height", 320)))
         elif t == "pie3d":
-            heights.append(int(block.get("height", 340)))
+            heights.append(int(b.get("height", 340)))
         elif t == "table":
-            n_rows = len(block.get("rows", []))
-            n_head = 1 if block.get("headers") else 0
+            n_rows = len(b.get("rows", []))
+            n_head = 1 if b.get("headers") else 0
             heights.append(60 + (n_rows + n_head) * 28 + 20)
         elif t == "image":
-            heights.append(int(block.get("height", 360)))
+            heights.append(int(b.get("height", 360)))
         else:
             heights.append(0)
 
@@ -667,8 +668,9 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
 
     # background
     bg_grad = theme.get("bg_grad")
-    if isinstance(bg_grad, (tuple, list)) and len(bg_grad) >= 2:
-        bg_c1, bg_c2 = str(bg_grad[0]), str(bg_grad[1])
+    grad: list[Any] = cast(list[Any], bg_grad) if isinstance(bg_grad, (tuple, list)) else []
+    if len(grad) >= 2:
+        bg_c1, bg_c2 = str(grad[0]), str(grad[1])
     else:
         bg_c1 = bg_c2 = theme_str(theme, "bg")
     canvas = make_gradient_bg(width, total_h, bg_c1, bg_c2).convert("RGBA")
@@ -693,13 +695,14 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
         if h <= 0 or not isinstance(block, dict):
             continue
         box = (padding, y, width - padding, y + h)
-        t = block.get("type", "text")
+        b = cast(JsonDict, block)
+        t = b.get("type", "text")
 
         if t == "heading":
-            draw.text((padding, y + 6), str(block.get("text", "")), font=font_h,
+            draw.text((padding, y + 6), str(b.get("text", "")), font=font_h,
                       fill=theme_str(theme, "text"))
         elif t == "text":
-            lines = wrap_lines(draw, str(block.get("text", "")), font_text, inner_w)
+            lines = wrap_lines(draw, str(b.get("text", "")), font_text, inner_w)
             ty = y + 4
             for line in lines:
                 draw.text((padding, ty), line, font=font_text,
@@ -710,15 +713,15 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
             draw.line([(padding + 10, mid_y), (width - padding - 10, mid_y)],
                       fill=theme_str(theme, "divider"), width=1)
         elif t == "bar":
-            render_bar_chart(canvas, box, block, theme)
+            render_bar_chart(canvas, box, b, theme)
         elif t == "line":
-            render_line_chart(canvas, box, block, theme)
+            render_line_chart(canvas, box, b, theme)
         elif t == "pie":
-            render_pie_chart(canvas, box, block, theme, depth=0)
+            render_pie_chart(canvas, box, b, theme, depth=0)
         elif t == "pie3d":
-            render_pie_chart(canvas, box, block, theme, depth=max(10, h // 24))
+            render_pie_chart(canvas, box, b, theme, depth=max(10, h // 24))
         elif t == "table":
-            render_table(canvas, box, block, theme)
+            render_table(canvas, box, b, theme)
         elif t == "image":
             img = preloaded.get(idx)
             if img is not None:

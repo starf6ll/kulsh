@@ -24,7 +24,7 @@ from typing import Any, Callable, Protocol, TypeAlias, TypeVar, cast
 
 import aiohttp
 import discord
-import telebot
+from telebot import types as types
 from dotenv import load_dotenv
 from PIL import ImageFont
 from telebot.async_telebot import AsyncTeleBot
@@ -68,7 +68,7 @@ def human_uptime() -> str:
     d, secs = divmod(secs, 86400)
     h, secs = divmod(secs, 3600)
     m, secs = divmod(secs, 60)
-    parts = []
+    parts: list[str] = []
     if d:
         parts.append(f"{d}д")
     if h or d:
@@ -245,13 +245,13 @@ def typed_decorator(decorator: Callable[..., Any]) -> Callable[..., _TypedHandle
     return cast(Callable[..., _TypedHandler], decorator)
 
 
-def cb_id(call: telebot.types.CallbackQuery) -> int:
+def cb_id(call: types.CallbackQuery) -> int:
     return cast(int, call.id)
 
 
-def tg_msg(call: telebot.types.CallbackQuery) -> telebot.types.Message:
+def tg_msg(call: types.CallbackQuery) -> types.Message:
     message = call.message
-    if not isinstance(message, telebot.types.Message):
+    if not isinstance(message, types.Message):
         raise RuntimeError("callback has no accessible message")
     return message
 
@@ -388,10 +388,11 @@ def load_user_configs() -> None:
             data = json.load(f)
         if not isinstance(data, dict):
             return
-        for k, v in data.items():
+        config_map = cast(JsonDict, data)
+        for k, v in config_map.items():
             if isinstance(v, dict):
                 merged = DEFAULT_USER_CONFIG.copy()
-                merged.update(v)
+                merged.update(cast(JsonDict, v))
                 user_configs[k] = merged
     except Exception as e:
         logger.error(f"load_user_configs: {e}")
@@ -470,7 +471,7 @@ def get_user_credits(platform: str, user_id: int) -> int:
 def spend_credits(platform: str, user_id: int, amount: int) -> bool:
     key = f"{platform}_{user_id}"
     today = today_str()
-    entry = credits_data.get(key)
+    entry: JsonDict | None = credits_data.get(key)
     if not entry or entry.get("last_reset") != today:
         entry = {"credits": DAILY_CREDITS, "last_reset": today}
     if entry["credits"] < amount:
@@ -1098,7 +1099,7 @@ def check_python_syntax(fpath: str) -> str | None:
 def check_all_syntax(repo_path: str) -> list[str]:
     errors: list[str] = []
     try:
-        for root, dirs, files in os.walk(repo_path):
+        for root, _dirs, files in os.walk(repo_path):
             if '.git' in root.split(os.sep):
                 continue
             for fname in files:
@@ -1205,9 +1206,9 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
 
     for step in range(0, MAX_BACK_STEPS + 1):
         if step == 0:
-            rc_h, out_h, err_h = run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
+            rc_h, out_h, _err_h = run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
         else:
-            rc_h, out_h, err_h = run_git(["rev-parse", f"HEAD~{step}"], cwd=repo_path, timeout=10)
+            rc_h, out_h, _err_h = run_git(["rev-parse", f"HEAD~{step}"], cwd=repo_path, timeout=10)
         if rc_h != 0 or not out_h.strip():
             break
         current_hash = out_h.strip()
@@ -1262,4 +1263,4 @@ try:
 except Exception as e:
     logger.warning(f"load на старте: {e}")
 
-from src.i18n import TEXTS, html_to_md, tr
+from src.i18n import TEXTS as TEXTS, html_to_md as html_to_md, tr as tr

@@ -6,14 +6,14 @@
 
 import asyncio
 from collections import deque
-import html
 import json
 import random
 import re
 import time
 from typing import Any, cast
 
-import telebot
+from telebot import types as types
+from telebot import util as util
 from telebot.types import ForceReply, InlineKeyboardMarkup, InputFile
 
 from src.loops import send_donation_alert
@@ -35,7 +35,7 @@ from src.rich import (
     cleanup_config_children,
     edit_rich_message,
     play_apply_animation,
-    reply_tg_html,
+    reply_tg_html as reply_tg_html,
     send_formatted,
     send_formatted_returning_id,
     send_rich_message,
@@ -76,12 +76,8 @@ from src.util import (
     cb_id,
     clean_extra_text,
     clean_json_text,
-    find_media_by_message_id,
     human_uptime,
-    is_femboy_battle_command,
-    is_femboy_rate_command,
     markdown_like_to_telegram_html,
-    mode_is_valid,
     process_ai_response,
     save_user_configs,
     scrub_stray_markers,
@@ -106,26 +102,25 @@ from src.util import (
     pending_donations,
     prompt_waiting,
     save_long_term_memory,
-    user_femboy_state,
 )
 import src.util as state
 
 tg_bot: Any = None
 
 
-def _media():
+def _media() -> Any:
     from src import media as media_mod
     return media_mod
 
 
-async def get_avatar_description_tg(message: telebot.types.Message, chat_id: int, user_id: int, lang: str = "ru") -> str | None:
-    return await _media().get_avatar_description_tg(message, chat_id, user_id, lang)
+async def get_avatar_description_tg(message: types.Message, chat_id: int, user_id: int, lang: str = "ru") -> str | None:
+    return cast("str | None", await _media().get_avatar_description_tg(message, chat_id, user_id, lang))
 
 
 async def get_recall_media_description_tg(
-    message: telebot.types.Message, chat_id: int, user_id: int, n: int = 3, lang: str = "ru",
+    message: types.Message, chat_id: int, user_id: int, n: int = 3, lang: str = "ru",
 ) -> str | None:
-    return await _media().get_recall_media_description_tg(message, chat_id, user_id, n, lang)
+    return cast("str | None", await _media().get_recall_media_description_tg(message, chat_id, user_id, n, lang))
 
 
 def bind(bot: Any) -> None:
@@ -163,7 +158,7 @@ async def _apply_tg_reaction(chat_id: int, message_id: int, emojis_str: str) -> 
     if not emojis:
         return []
     try:
-        from telebot.types import ReactionTypeEmoji  # type: ignore
+        from telebot.types import ReactionTypeEmoji
     except Exception:
         ReactionTypeEmoji = None  # type: ignore
     if ReactionTypeEmoji is None:
@@ -179,7 +174,7 @@ async def _apply_tg_reaction(chat_id: int, message_id: int, emojis_str: str) -> 
 
 
 async def _handle_reaction_markers(
-    message: telebot.types.Message,
+    message: types.Message,
     chat_id: int,
     user_id: int,
     text: str,
@@ -257,7 +252,7 @@ async def _edit_config_message(chat_id: int, message_id: int,
             return False
 
 
-async def edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:
+async def edit_or_send(call: types.CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:
     msg = tg_msg(call)
     await _edit_config_message(msg.chat.id, msg.message_id, text, kb)
 
@@ -265,7 +260,7 @@ async def edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: InlineK
 # ============================================================
 # CALLBACK HANDLER (cfg:)
 # ============================================================
-async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
+async def handle_cfg_callback(call: types.CallbackQuery) -> None:
     msg = tg_msg(call)
     data = call.data or ""
     owner = config_msg_owners.get(msg.message_id)
@@ -477,7 +472,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
 # ============================================================
 # CALLBACK HANDLER (menu:)
 # ============================================================
-async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
+async def handle_menu_callback(call: types.CallbackQuery) -> None:
     msg = tg_msg(call)
     data = call.data or ""
     action = data.split(":", 1)[1] if ":" in data else ""
@@ -534,8 +529,8 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
 # ============================================================
 # HELP / MENU / START / DONATE / STATUS
 # ============================================================
-async def handle_start(message: telebot.types.Message) -> None:
-    args = telebot.util.extract_arguments(message.text or "")
+async def handle_start(message: types.Message) -> None:
+    args = util.extract_arguments(message.text or "")
     if args and args.startswith('donate_stars_'):
         try:
             stars = int(args.split('_')[-1])
@@ -545,7 +540,7 @@ async def handle_start(message: telebot.types.Message) -> None:
             await reply_tg_html(message, "❌ Неверное количество звёзд.")
             return
         pending_donations[message.chat.id] = stars
-        prices = [cast(Any, telebot.types.LabeledPrice)(label="💎 Поддержать Кульша", amount=stars)]
+        prices = [cast(Any, types.LabeledPrice)(label="💎 Поддержать Кульша", amount=stars)]
         await tg_bot.send_invoice(
             chat_id=message.chat.id, title="💎 Донат Кульшу",
             description=f"💖 Поддержка разработки на {stars} ⭐",
@@ -566,7 +561,7 @@ async def handle_start(message: telebot.types.Message) -> None:
     await send_formatted(chat_id, start_text, reply_to=message.message_id, reply_markup=kb)
 
 
-async def handle_menu(message: telebot.types.Message) -> None:
+async def handle_menu(message: types.Message) -> None:
     if message.from_user is None:
         return
     chat_id = message.chat.id
@@ -579,7 +574,7 @@ async def handle_menu(message: telebot.types.Message) -> None:
     await send_formatted(chat_id, menu_text, reply_to=message.message_id, reply_markup=kb)
 
 
-async def handle_help(message: telebot.types.Message) -> None:
+async def handle_help(message: types.Message) -> None:
     if message.from_user is None:
         return
     cfg = get_user_config("tg", message.chat.id, message.from_user.id)
@@ -594,7 +589,7 @@ async def handle_help(message: telebot.types.Message) -> None:
         )
 
 
-async def handle_donate(message: telebot.types.Message) -> None:
+async def handle_donate(message: types.Message) -> None:
     if message.from_user is None:
         return
     cfg = get_user_config("tg", message.chat.id, message.from_user.id)
@@ -613,13 +608,13 @@ async def handle_donate(message: telebot.types.Message) -> None:
         await reply_tg_html(message, f"Поддержать Кульша: {DONATE_URL} 🍷🗿")
 
 
-async def handle_donate_stars(message: telebot.types.Message) -> None:
+async def handle_donate_stars(message: types.Message) -> None:
     if message.from_user is None:
         return
     chat_id = message.chat.id
     cfg = get_user_config("tg", chat_id, message.from_user.id)
     lang = cfg.get("language", "ru")
-    args = (telebot.util.extract_arguments(message.text or "") or "").strip()
+    args = (util.extract_arguments(message.text or "") or "").strip()
     if not args:
         await reply_tg_html(message, tr(lang, "donate_stars_need"))
         return
@@ -631,7 +626,7 @@ async def handle_donate_stars(message: telebot.types.Message) -> None:
         await reply_tg_html(message, tr(lang, "donate_stars_bad"))
         return
     pending_donations[chat_id] = stars
-    prices = [cast(Any, telebot.types.LabeledPrice)(label="Поддержать Кульша", amount=stars)]
+    prices = [cast(Any, types.LabeledPrice)(label="Поддержать Кульша", amount=stars)]
     try:
         await tg_bot.send_invoice(
             chat_id=chat_id, title="Донат Кульшу",
@@ -645,7 +640,7 @@ async def handle_donate_stars(message: telebot.types.Message) -> None:
         await reply_tg_html(message, tr(lang, "donate_invoice_fail", str(e)))
 
 
-async def handle_credits(message: telebot.types.Message) -> None:
+async def handle_credits(message: types.Message) -> None:
     if message.from_user is None:
         return
     cfg = get_user_config("tg", message.chat.id, message.from_user.id)
@@ -654,7 +649,7 @@ async def handle_credits(message: telebot.types.Message) -> None:
     await reply_tg_html(message, tr(lang, "credits_balance", creds, DAILY_CREDITS))
 
 
-async def handle_status(message: telebot.types.Message) -> None:
+async def handle_status(message: types.Message) -> None:
     if message.from_user is None:
         return
     chat_id = message.chat.id
@@ -688,7 +683,7 @@ async def handle_status(message: telebot.types.Message) -> None:
         await reply_tg_html(message, f"🟢 {tr(lang, 'status_online')} · {human_uptime()}")
 
 
-async def handle_toggle_premium(message: telebot.types.Message) -> None:
+async def handle_toggle_premium(message: types.Message) -> None:
     if message.from_user is None or message.from_user.id != PREMIUM_ADMIN_ID:
         await reply_tg_html(message, "⛔ Нет доступа.")
         return
@@ -697,11 +692,11 @@ async def handle_toggle_premium(message: telebot.types.Message) -> None:
     await reply_tg_html(message, f"Расширенные функции: {label}")
 
 
-async def handle_pre_checkout(pre_checkout: telebot.types.PreCheckoutQuery) -> None:
+async def handle_pre_checkout(pre_checkout: types.PreCheckoutQuery) -> None:
     await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
 
 
-async def handle_successful_payment(message: telebot.types.Message) -> None:
+async def handle_successful_payment(message: types.Message) -> None:
     if message.successful_payment is None or message.from_user is None:
         return
     payment = message.successful_payment
@@ -722,7 +717,7 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
 # ============================================================
 # CONFIG / AVATAR / RECALL / SEARCH / CHART / FMB
 # ============================================================
-async def tg_handle_config(message: telebot.types.Message) -> None:
+async def tg_handle_config(message: types.Message) -> None:
     if message.from_user is None:
         return
     chat_id = message.chat.id
@@ -748,7 +743,7 @@ async def tg_handle_config(message: telebot.types.Message) -> None:
             logger.error(f"Config fallback fail: {e}")
 
 
-async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
+async def tg_handle_avatar(message: types.Message, chat_id: int, user_id: int) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     raw = await get_avatar_description_tg(message, chat_id, user_id, lang=lang)
@@ -769,7 +764,7 @@ async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id
             await send_tg_html(message.chat.id, seg)
 
 
-async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, user_id: int, parts: list[str]) -> None:
+async def tg_handle_recall_media(message: types.Message, chat_id: int, user_id: int, parts: list[str]) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     n = 3
@@ -787,7 +782,7 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, u
             prompt = (
                 f"Опиши коротко и живо, что на этом {kind_label}, в стиле Кульша. Маленькими буквами. Без маркеров."
             )
-            raw = await ask_ai_async(
+            raw: str | None = await ask_ai_async(
                 prompt=prompt, image_bytes=media_bytes, image_mime="image/jpeg",
                 chat_id=chat_id, user_id=user_id, platform="tg",
             )
@@ -819,7 +814,7 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, u
             await send_tg_html(message.chat.id, seg)
 
 
-async def tg_handle_search(message: telebot.types.Message, query: str, chat_id: int, user_id: int) -> None:
+async def tg_handle_search(message: types.Message, query: str, chat_id: int, user_id: int) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     if not query.strip():
@@ -844,7 +839,7 @@ async def tg_handle_search(message: telebot.types.Message, query: str, chat_id: 
     answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg")
     header = f"🔎 **{query}**\n\n"
     full = header + "\n" + (answer or "")
-    sources = []
+    sources: list[str] = []
     for i, r in enumerate(results[:4], 1):
         sources.append(f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})")
     if sources:
@@ -852,7 +847,7 @@ async def tg_handle_search(message: telebot.types.Message, query: str, chat_id: 
     await send_formatted(chat_id, full, reply_to=message.message_id)
 
 
-async def tg_handle_chart_request(message: telebot.types.Message, description: str,
+async def tg_handle_chart_request(message: types.Message, description: str,
                                   chat_id: int, user_id: int,
                                   user_images: list[bytes] | None = None) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
@@ -871,7 +866,7 @@ async def tg_handle_chart_request(message: telebot.types.Message, description: s
         system_instruction_override="You are a data-visualization JSON generator. Output ONLY valid JSON.",
         chat_id=chat_id, user_id=user_id, platform="tg",
     )
-    spec = None
+    spec: dict[str, Any] | None = None
     try:
         spec = json.loads(clean_json_text(raw))
     except Exception:
@@ -914,7 +909,7 @@ async def tg_handle_chart_request(message: telebot.types.Message, description: s
 # ============================================================
 # FEMBOY RATE
 # ============================================================
-async def tg_handle_femboy_rate(message: telebot.types.Message, chat_id: int, user_id: int,
+async def tg_handle_femboy_rate(message: types.Message, chat_id: int, user_id: int,
                                 photo_bytes: bytes, caption: str = "") -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
@@ -952,7 +947,7 @@ async def tg_handle_femboy_rate(message: telebot.types.Message, chat_id: int, us
         await reply_tg_html(message, f"🌋 Ошибка: {e}")
 
 
-async def tg_process_femboy_album(media_group_id: str, chat_id: int, user_id: int) -> None:
+async def tg_process_femboy_album(media_group_id: str, chat_id: int, user_id: int, message: types.Message | None = None) -> None:
     from src.util import battle_photos as bp
     for _ in range(10):
         if media_group_id in bp and len(bp[media_group_id]) >= 2:
@@ -994,14 +989,14 @@ async def tg_process_femboy_album(media_group_id: str, chat_id: int, user_id: in
     await tg_bot.delete_message(chat_id, status.message_id)
 
 
-def message_id_fallback(message: telebot.types.Message | None) -> int | None:
+def message_id_fallback(message: types.Message | None) -> int | None:
     return message.message_id if message else None
 
 
 # ============================================================
 # UTILITY / GROUP & USER INFO
 # ============================================================
-async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_id: int, user_id: int) -> None:
+async def execute_utility_tg(message: types.Message, marker: str, chat_id: int, user_id: int) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     if marker in ("sticker", "gif"):
         if not cfg.get("stickers_enabled", True):
@@ -1094,7 +1089,7 @@ async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tru
 # ============================================================
 # SEND TG AI RESPONSE
 # ============================================================
-async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user_id: int,
+async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int,
                               answer_raw: str, user_text: str | None = None,
                               user_images: list[bytes] | None = None) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
@@ -1107,7 +1102,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     orig_user_text = (user_text or (message.text or message.caption or "")).strip()
 
     # !react / !why — до всего
-    answer_raw, applied_reactions = await _handle_reaction_markers(message, chat_id, user_id, answer_raw or "", cfg)
+    answer_raw, _applied_reactions = await _handle_reaction_markers(message, chat_id, user_id, answer_raw or "", cfg)
 
     # !search
     if cfg.get("web_search_enabled", True):
@@ -1300,7 +1295,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
 # ============================================================
 # OLD MESSAGE REPLY
 # ============================================================
-async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
+async def maybe_reply_to_old_message_tg(message: types.Message, chat_id: int, user_id: int) -> None:
     try:
         await asyncio.sleep(3)
     except asyncio.CancelledError:

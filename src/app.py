@@ -5,10 +5,12 @@
 """Process entry: build the bots, register handlers, run both platforms."""
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 import discord
 from discord import app_commands
+from telebot import types as types
 from telebot.async_telebot import AsyncTeleBot
 
 from src import discord_cmds, discord_msg, loops, media, rich, telegram
@@ -48,22 +50,36 @@ discord_cmds.bind(ds_bot)
 loops.bind(ds_bot, tg_bot)
 
 
+def _callback_startswith(prefix: str) -> Callable[[types.CallbackQuery], bool]:
+    def _filter(call: types.CallbackQuery) -> bool:
+        return bool(call.data and call.data.startswith(prefix))
+    return _filter
+
+
+def _always_true(_query: types.PreCheckoutQuery) -> bool:
+    return True
+
+
+def _message_has_text(message: types.Message) -> bool:
+    return message.text is not None
+
+
 def register_telegram() -> None:
     deco = typed_decorator
-    deco(tg_bot.callback_query_handler)(func=lambda call: bool(call.data and call.data.startswith("cfg:")))(telegram.handle_cfg_callback)
-    deco(tg_bot.callback_query_handler)(func=lambda call: bool(call.data and call.data.startswith("menu:")))(telegram.handle_menu_callback)
-    deco(tg_bot.message_handler)(commands=["start"])(telegram.handle_start)
-    deco(tg_bot.message_handler)(commands=["menu"])(telegram.handle_menu)
-    deco(tg_bot.message_handler)(commands=["help"])(telegram.handle_help)
-    deco(tg_bot.message_handler)(commands=["status"])(telegram.handle_status)
-    deco(tg_bot.message_handler)(commands=["donate"])(telegram.handle_donate)
-    deco(tg_bot.message_handler)(commands=["donate_stars"])(telegram.handle_donate_stars)
-    deco(tg_bot.message_handler)(commands=["credits"])(telegram.handle_credits)
-    deco(tg_bot.message_handler)(commands=["togglepremiumfunctionsadmin"])(telegram.handle_toggle_premium)
-    deco(tg_bot.pre_checkout_query_handler)(func=lambda query: True)(telegram.handle_pre_checkout)
-    deco(tg_bot.message_handler)(content_types=["successful_payment"])(telegram.handle_successful_payment)
-    deco(tg_bot.message_handler)(content_types=["photo", "video", "animation", "document", "sticker"])(media.handle_tg_media)
-    deco(tg_bot.message_handler)(func=lambda m: m.text is not None, content_types=["text"])(media.handle_tg_text)
+    deco(getattr(tg_bot, "callback_query_handler"))(func=_callback_startswith("cfg:"))(telegram.handle_cfg_callback)
+    deco(getattr(tg_bot, "callback_query_handler"))(func=_callback_startswith("menu:"))(telegram.handle_menu_callback)
+    deco(getattr(tg_bot, "message_handler"))(commands=["start"])(telegram.handle_start)
+    deco(getattr(tg_bot, "message_handler"))(commands=["menu"])(telegram.handle_menu)
+    deco(getattr(tg_bot, "message_handler"))(commands=["help"])(telegram.handle_help)
+    deco(getattr(tg_bot, "message_handler"))(commands=["status"])(telegram.handle_status)
+    deco(getattr(tg_bot, "message_handler"))(commands=["donate"])(telegram.handle_donate)
+    deco(getattr(tg_bot, "message_handler"))(commands=["donate_stars"])(telegram.handle_donate_stars)
+    deco(getattr(tg_bot, "message_handler"))(commands=["credits"])(telegram.handle_credits)
+    deco(getattr(tg_bot, "message_handler"))(commands=["togglepremiumfunctionsadmin"])(telegram.handle_toggle_premium)
+    deco(getattr(tg_bot, "pre_checkout_query_handler"))(func=_always_true)(telegram.handle_pre_checkout)
+    deco(getattr(tg_bot, "message_handler"))(content_types=["successful_payment"])(telegram.handle_successful_payment)
+    deco(getattr(tg_bot, "message_handler"))(content_types=["photo", "video", "animation", "document", "sticker"])(media.handle_tg_media)
+    deco(getattr(tg_bot, "message_handler"))(func=_message_has_text, content_types=["text"])(media.handle_tg_text)
 
 
 def register_discord() -> None:
@@ -131,7 +147,7 @@ def register() -> None:
     register_discord()
 
 
-def _smoke_check() -> None:
+def _smoke_check() -> None:  # pyright: ignore[reportUnusedFunction]
     """
     Runtime smoke-проверка. Вызывается safe_check_import() в subprocess после git pull.
     Жёстко проверяем только то, без чего бот НЕ запустится:
@@ -187,15 +203,13 @@ def _smoke_check() -> None:
 async def main() -> None:
     register()
 
-    _random_loop = getattr(loops, "random_post_loop", None)
-    if callable(_random_loop):
-        asyncio.create_task(_random_loop())
+    if callable(getattr(loops, "random_post_loop", None)):
+        asyncio.create_task(loops.random_post_loop())
     else:
         logger.warning("random_post_loop отсутствует — пропускаю")
 
-    _save_loop = getattr(loops, "periodic_config_save_loop", None)
-    if callable(_save_loop):
-        asyncio.create_task(_save_loop())
+    if callable(getattr(loops, "periodic_config_save_loop", None)):
+        asyncio.create_task(loops.periodic_config_save_loop())
     else:
         logger.warning("⚠️ periodic_config_save_loop отсутствует — настройки НЕ будут сохраняться автоматически")
 
@@ -213,11 +227,11 @@ async def main() -> None:
             logger.error(f"Не удалось синхронизировать slash-команды: {e}")
         _series_loop = getattr(loops, "series_reminder_loop", None)
         if callable(_series_loop):
-            asyncio.create_task(_series_loop())
+            asyncio.create_task(loops.series_reminder_loop())
         if DONATIONALERTS_TOKEN:
             _don_loop = getattr(loops, "donation_alerts_listener", None)
             if callable(_don_loop):
-                asyncio.create_task(_don_loop())
+                asyncio.create_task(loops.donation_alerts_listener())
 
     async def start_discord() -> None:
         try:

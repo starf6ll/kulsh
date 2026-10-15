@@ -33,8 +33,6 @@ from src.util import (
     MINI_APP_URL,
     MODEL_DISPLAY,
     MODEL_LIST,
-    REACT_PATTERN,
-    WHY_PATTERN,
     RECALL_MEDIA_ID_PATTERN,
     add_bot_memory,
     as_member,
@@ -49,8 +47,6 @@ from src.util import (
     find_media_by_message_id,
     get_ds_scope,
     get_effective_config,
-    get_top_donators,
-    get_user_config,
     get_user_credits,
     get_write_config,
     human_uptime,
@@ -60,7 +56,6 @@ from src.util import (
     premium_functions_enabled,
     process_ai_response,
     read_log_tail,
-    save_ds_scopes,
     save_user_configs,
     scrub_stray_markers,
     set_ds_scope,
@@ -587,11 +582,11 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
         await message.reply(tr(lang, "ds_unknown_param"))
 
 
-def ds_slash_help(lang: str) -> str:
+def ds_help_text(lang: str) -> str:
     return tr(lang, "help_body", MINI_APP_URL, GITHUB_URL)
 
 
-def ds_slash_menu(lang: str) -> str:
+def ds_menu_text(lang: str) -> str:
     if lang == "ru":
         return (
             "# ✦ Кульш AI — меню ✦\n\n---\n\n"
@@ -614,7 +609,7 @@ def ds_slash_menu(lang: str) -> str:
     )
 
 
-def ds_slash_start(lang: str) -> str:
+def ds_start_text(lang: str) -> str:
     if lang == "ru":
         return (
             "# 🍷🗿 Кульш на связи\n\n---\n\n"
@@ -640,17 +635,17 @@ def ds_lang_of(interaction: discord.Interaction) -> str:
 
 async def ds_slash_start(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
-    await interaction.response.send_message(ds_slash_start(lang))
+    await interaction.response.send_message(ds_start_text(lang))
 
 
 async def ds_slash_menu(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
-    await interaction.response.send_message(ds_slash_menu(lang))
+    await interaction.response.send_message(ds_menu_text(lang))
 
 
 async def ds_slash_help(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
-    await interaction.response.send_message(ds_slash_help(lang))
+    await interaction.response.send_message(ds_help_text(lang))
 
 
 async def ds_slash_status(interaction: discord.Interaction) -> None:
@@ -762,7 +757,7 @@ async def ds_slash_recall(interaction: discord.Interaction, count: int = 3) -> N
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
     lang = ds_lang_of(interaction)
-    n = max(1, min(10, count))
+    _n = max(1, min(10, count))
     media_bytes, media_kind, _ = await fetch_last_media_ds(chat_id)
     if media_bytes is None:
         await interaction.followup.send(tr(lang, "recall_fail"))
@@ -839,7 +834,7 @@ async def ds_slash_chart(interaction: discord.Interaction, description: str) -> 
         system_instruction_override="You are a data-visualization JSON generator. Output ONLY valid JSON.",
         chat_id=chat_id, user_id=user_id, platform="ds",
     )
-    spec = None
+    spec: dict[str, Any] | None = None
     try:
         spec = json.loads(clean_json_text(raw))
     except Exception:
@@ -983,14 +978,15 @@ async def ds_slash_groupinfo(interaction: discord.Interaction) -> None:
         )
         return
     g = interaction.guild
-    lines = []
+    lines: list[str] = []
     lines.append(("Название: " if lang == "ru" else "Name: ") + (g.name or "?"))
     lines.append(f"ID: {g.id}")
     if g.owner_id:
         lines.append(f"Owner ID: {g.owner_id}")
     lines.append(("Участников: " if lang == "ru" else "Members: ") + str(g.member_count or "?"))
     lines.append(("Бустов: " if lang == "ru" else "Boosts: ") + str(g.premium_subscription_count or 0))
-    lines.append(("Создан: " if lang == "ru" else "Created: ") + (g.created_at.strftime('%d.%m.%Y') if g.created_at else "?"))
+    created = g.created_at.strftime('%d.%m.%Y') if g.created_at else "?"
+    lines.append(("Создан: " if lang == "ru" else "Created: ") + created)
     if g.description:
         lines.append(("Описание: " if lang == "ru" else "Description: ") + str(g.description)[:300])
     text = "\n".join(lines)
@@ -1001,7 +997,7 @@ async def ds_slash_groupinfo(interaction: discord.Interaction) -> None:
 async def ds_slash_userinfo(interaction: discord.Interaction, user: discord.Member | None = None) -> None:
     lang = ds_lang_of(interaction)
     target = user or interaction.user
-    lines = []
+    lines: list[str] = []
     lines.append(("Имя: " if lang == "ru" else "Name: ") + str(target.display_name))
     lines.append(f"Username: @{target.name}")
     lines.append(f"ID: {target.id}")

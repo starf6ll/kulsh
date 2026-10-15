@@ -2,7 +2,7 @@
 name = "kulsh"
 version = "2.15.2"
 description = "Kulsh GPT - Multifunctional AI bot for Telegram and Discord"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 dependencies = [
     "aiohttp>=3.9.0",
     "python-dotenv>=1.0.0",
@@ -28,17 +28,17 @@ dev = [
 ]
 
 [tool.pyright]
-pythonVersion = "3.10"
+pythonVersion = "3.14"
 venvPath = "."
 venv = "venv"
 include = ["kulsh.py", "src"]
 exclude = ["venv/**", ".venv/**"]
 typeCheckingMode = "strict"
 reportMissingImports = true
-# stubPath = "stubs"
+stubPath = "stubs/vendor"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.14"
 files = ["kulsh.py", "src"]
 exclude = ["venv", ".venv", "stubs/telebot"]
 mypy_path = "stubs/vendor"

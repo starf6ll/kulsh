@@ -8,7 +8,7 @@ import asyncio
 import html
 import json
 import re
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import aiohttp
@@ -23,6 +23,7 @@ from src.util import (
     NEUTRALBEATS_MODELS,
     NEUTRALBEATS_URL,
     SearchHit,
+    JsonDict,
     json_dict,
     json_str,
     tr,
@@ -214,8 +215,9 @@ def _openai_content(parts: list[dict[str, Any]]) -> str | list[dict[str, Any]]:
             blocks.append({"type": "text", "text": text})
         inline = part.get("inline_data")
         if isinstance(inline, dict):
-            data = inline.get("data")
-            mime = inline.get("mime_type") or "image/jpeg"
+            inline_d = cast(JsonDict, inline)
+            data = inline_d.get("data")
+            mime = inline_d.get("mime_type") or "image/jpeg"
             if isinstance(data, str) and data:
                 blocks.append({
                     "type": "image_url",
@@ -236,7 +238,7 @@ def _to_openai_messages(
     for item in contents:
         role = "assistant" if item.get("role") == "model" else "user"
         parts = item.get("parts")
-        content = _openai_content(parts if isinstance(parts, list) else [])
+        content = _openai_content(cast(list[dict[str, Any]], parts) if isinstance(parts, list) else [])
         messages.append({"role": role, "content": content})
     return messages
 
@@ -289,9 +291,10 @@ async def _ask_openai_chat(
         logger.info("   ✓ 200 OK — ответ получен")
         return content
     if isinstance(content, list):
+        content_list = cast(list[object], content)
         texts = [
             json_str(json_dict(block).get("text"))
-            for block in content
+            for block in content_list
             if isinstance(block, dict)
         ]
         joined = "".join(texts).strip()
@@ -446,7 +449,7 @@ async def ask_ai_async(
             logger.info(f"🔄 AI [{total_attempt}/{total_max}] model={model_name} key={api_key[:6]}…")
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=payload_base, timeout=45) as resp:
+                    async with session.post(url, json=payload_base, timeout=aiohttp.ClientTimeout(total=45)) as resp:
                         status = resp.status
                         logger.info(f"   ↳ HTTP {status} ({model_name}, ключ {api_key[:6]}…)")
                         if status == 503:
@@ -471,14 +474,15 @@ async def ask_ai_async(
                         data = json_dict(await resp.json())
                         if 'candidates' in data and data['candidates']:
                             try:
-                                candidate = data['candidates'][0]
-                                content = json_dict(candidate.get('content') if isinstance(candidate, dict) else None)
+                                candidate = json_dict(data['candidates'][0])
+                                content = json_dict(candidate.get('content'))
                                 parts_raw = content.get('parts')
+                                parts_list = cast(list[object], parts_raw) if isinstance(parts_raw, list) else []
                                 texts = [
                                     json_str(json_dict(part).get("text"))
-                                    for part in parts_raw
+                                    for part in parts_list
                                     if isinstance(part, dict) and json_dict(part).get("text")
-                                ] if isinstance(parts_raw, list) else []
+                                ]
                                 if texts:
                                     logger.info("   ✓ 200 OK — ответ получен")
                                     return "".join(texts)
@@ -513,10 +517,11 @@ async def extract_memory(chat_id: str, user_message: str, bot_answer: str) -> No
         raw = await ask_ai_async(prompt=prompt, system_instruction_override=system_instruction, messages=None)
         facts = json.loads(clean_json_text(raw))
         if isinstance(facts, list) and facts:
+            facts_list = cast(list[object], facts)
             if chat_id not in long_term_memory:
                 long_term_memory[chat_id] = {"facts": [], "events": []}
             existing = set(long_term_memory[chat_id].get("facts", []))
-            for fact in facts:
+            for fact in facts_list:
                 if isinstance(fact, str) and fact not in existing:
                     long_term_memory[chat_id]["facts"].append(fact)
                     existing.add(fact)
@@ -548,7 +553,7 @@ async def web_search_ddg(query: str, max_results: int = 6) -> list[SearchHit]:
     async with aiohttp.ClientSession(headers=headers) as session:
         for url, data in endpoints:
             try:
-                async with session.post(url, data=data, timeout=15,
+                async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=15),
                                         allow_redirects=True) as resp:
                     if resp.status != 200:
                         continue
@@ -623,7 +628,7 @@ def strip_tags(text: str) -> str:
 
 async def web_search_wikipedia(query: str, max_results: int = 3) -> list[SearchHit]:
     try:
-        params = {
+        params: dict[str, str | int] = {
             "action": "query",
             "list": "search",
             "srsearch": query,
@@ -633,7 +638,7 @@ async def web_search_wikipedia(query: str, max_results: int = 3) -> list[SearchH
         headers = {"User-Agent": USER_AGENT}
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get("https://ru.wikipedia.org/w/api.php",
-                                   params=params, timeout=10) as resp:
+                                   params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
                     return []
                 data = json_dict(await resp.json())
@@ -642,7 +647,8 @@ async def web_search_wikipedia(query: str, max_results: int = 3) -> list[SearchH
         search_items = query_obj.get("search", [])
         if not isinstance(search_items, list):
             search_items = []
-        for item in search_items[:max_results]:
+        items = cast(list[object], search_items)
+        for item in items[:max_results]:
             item_d = json_dict(item)
             title = json_str(item_d.get("title"))
             snippet = strip_tags(json_str(item_d.get("snippet")))
@@ -670,7 +676,7 @@ async def web_search(query: str, max_results: int = 6) -> list[SearchHit]:
 
 
 def format_search_results(results: list[SearchHit], max_chars: int = 4000) -> str:
-    lines = []
+    lines: list[str] = []
     for i, r in enumerate(results, 1):
         t = (r.get("title") or "").strip()
         u = (r.get("url") or "").strip()

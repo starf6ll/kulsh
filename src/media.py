@@ -10,18 +10,14 @@ import re
 import time
 from typing import Any
 
-import telebot
+from telebot import types as types
 from telebot.types import InputFile
 
 from src.ai import ask_ai_async, extract_memory
 from src.looks import (
     create_battle_infographic,
-    create_femboy_battle_infographic,
-    create_femboy_infographic,
     create_infographic,
     get_battle_data,
-    get_femboy_battle_data,
-    get_femboy_data,
     get_looksmaxxing_data,
 )
 
@@ -38,7 +34,7 @@ def tg_bot_id() -> int | None:
         return None
 
 
-def resolve_avatar_target_tg(message: telebot.types.Message) -> telebot.types.User | None:
+def resolve_avatar_target_tg(message: types.Message) -> types.User | None:
     bot_id = tg_bot_id()
     if message.reply_to_message and message.reply_to_message.from_user:
         rt = message.reply_to_message.from_user
@@ -54,7 +50,7 @@ def resolve_avatar_target_tg(message: telebot.types.Message) -> telebot.types.Us
 
 
 async def get_avatar_description_tg(
-    message: telebot.types.Message, chat_id: int, user_id: int, lang: str = "ru",
+    message: types.Message, chat_id: int, user_id: int, lang: str = "ru",
 ) -> str | None:
     target = resolve_avatar_target_tg(message)
     if target is None:
@@ -138,7 +134,7 @@ async def fetch_media_by_id_tg(chat_id: int, message_id: int) -> tuple[bytes | N
 
 
 async def get_recall_media_description_tg(
-    message: telebot.types.Message, chat_id: int, user_id: int, n: int = 3, lang: str = "ru",
+    message: types.Message, chat_id: int, user_id: int, n: int = 3, lang: str = "ru",
 ) -> str | None:
     """Резервный путь — если бот вызвал !recall_media из обычного чата, а не через send_tg_ai_response."""
     img_bytes, img_kind, _ = await fetch_last_media_tg(chat_id)
@@ -174,6 +170,7 @@ from src.util import (
     get_chat_memory,
     get_tg_file_bytes,
     get_user_config,
+    save_user_configs,
     is_battle_command,
     is_femboy_battle_command,
     is_femboy_rate_command,
@@ -201,7 +198,7 @@ from src.util import (
 )
 
 
-def _is_addressed_from_bot_tg(message: telebot.types.Message) -> bool:
+def _is_addressed_from_bot_tg(message: types.Message) -> bool:
     bot_id = tg_bot_id()
     reply_ok = bool(
         message.reply_to_message and message.reply_to_message.from_user
@@ -222,7 +219,7 @@ def _is_addressed_from_bot_tg(message: telebot.types.Message) -> bool:
 # ============================================================
 # MEDIA HANDLER
 # ============================================================
-async def handle_tg_media(message: telebot.types.Message) -> None:
+async def handle_tg_media(message: types.Message) -> None:
     if message.from_user is None:
         return
     chat_id = message.chat.id
@@ -287,7 +284,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             if mgid not in battle_photos:
                 battle_photos[mgid] = []
                 battle_media_groups[mgid] = asyncio.create_task(
-                    _tg().tg_process_femboy_album(mgid, chat_id, user_id)
+                    _tg().tg_process_femboy_album(mgid, chat_id, user_id, message)
                 )
             img_bytes = await get_tg_file_bytes(_tg().tg_bot, message.photo[-1].file_id)
             battle_photos[mgid].append(img_bytes)
@@ -497,7 +494,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
 # ============================================================
 # TG TEXT HANDLER
 # ============================================================
-async def handle_tg_text(message: telebot.types.Message) -> None:
+async def handle_tg_text(message: types.Message) -> None:
     if message.from_user is None:
         return
     chat_id = message.chat.id
