@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.46.0
+# Kulsh GPT | v2.47.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -76,7 +76,6 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"{tr(lang, 'cfg_theme')}: {theme_disp}\n"
         f"{tr(lang, 'cfg_mode')}: {mode_txt}\n"
         f"{tr(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}\n"
-        f"{tr(lang, 'cfg_temp_short')}: `{cfg.get('temperature', 0.9)}`\n"
         f"{tr(lang, 'cfg_sep')}: {on if cfg.get('separate_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_stream')}: {stream_txt}\n"
         f"{tr(lang, 'cfg_stickers')}: {on if cfg.get('stickers_enabled', True) else off}\n"
@@ -104,10 +103,10 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
             style=None, callback_data="cfg:model"),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(f"{tr(lang, 'cfg_temp_short')}: {cfg.get('temperature', 0.9)}",
-            style=None, callback_data="cfg:temp"),
         btn(f"{tr(lang, 'cfg_websearch')}: {'✅' if cfg.get('web_search_enabled', True) else '❌'}",
             style=None, callback_data="cfg:websearch"),
+        btn(f"{tr(lang, 'cfg_drawing')}: {'✅' if cfg.get('drawing_enabled', True) else '❌'}",
+            style=None, callback_data="cfg:drawing"),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_sep')}: {'✅' if cfg.get('separate_enabled', True) else '❌'}",
@@ -205,22 +204,6 @@ def build_theme_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKey
         btn(f"{'🔘' if cur == 'light' else '▫️'} {'Светлая ☀️' if lang == 'ru' else 'Light ☀️'}",
             style="primary" if cur == "light" else None, callback_data="cfg:theme_set:light"),
     )
-    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data="cfg:sub_back"))  # pyright: ignore[reportUnknownMemberType]
-    return kb
-
-
-def build_temp_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
-    cfg = get_user_config(platform, chat_id, user_id)
-    cur = cfg.get("temperature", 0.9)
-    lang = cfg.get("language", "ru")
-    kb = InlineKeyboardMarkup()
-    values = [0.2, 0.5, 0.7, 0.9, 1.1, 1.3, 1.5]
-    row: list[StyledButton] = []
-    for v in values:
-        mark = "🔘" if abs(cur - v) < 0.01 else "▫️"
-        row.append(btn(f"{mark} {v}", style=None, callback_data=f"cfg:temp_set:{v}"))
-    kb.row(*row[:4])  # pyright: ignore[reportUnknownMemberType]
-    kb.row(*row[4:])  # pyright: ignore[reportUnknownMemberType]
     kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data="cfg:sub_back"))  # pyright: ignore[reportUnknownMemberType]
     return kb
 

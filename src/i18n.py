@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.46.0
+# Kulsh GPT | v2.47.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -24,6 +24,7 @@ TEXTS: dict[str, tuple[str, str]] = {
 	"cfg_reactions_off":       ("Реакции: выключены ❌", "Reactions: off ❌"),
 	"ds_setting_reactions":    ("Реакции: {0}", "Reactions: {0}"),
     "cfg_websearch":           ("🔎 Веб-поиск", "🔎 Web search"),
+    "cfg_drawing":             ("🎨 Рисование", "🎨 Drawing"),
     "cfg_edit_prompt":         ("📝 Изменить промпт", "📝 Edit prompt"),
     "cfg_reset_memory":        ("🧹 Сбросить память", "🧹 Reset memory"),
     "cfg_reset_prompt":        ("♻️ Сбросить промпт", "♻️ Reset prompt"),
@@ -66,10 +67,10 @@ TEXTS: dict[str, tuple[str, str]] = {
     "prompt_cancelled":        ("Изменение промпта отменено", "Prompt edit cancelled"),
 
     # ---- Режимы общения ----
-    "mode_kent":               ("kulsh.ai〢Кент", "kulsh.ai〢Kent"),
+    "mode_kent":               ("kulsh.ai〢Обычный", "kulsh.ai〢Classic"),
     "mode_assistant":          ("kulsh.ai〢Ассистент", "kulsh.ai〢Assistant"),
     "mode_pro":                ("kulsh.ai〢Pro", "kulsh.ai〢Pro"),
-    "mode_kent_hint":          ("По умолчанию", "Default"),
+    "mode_kent_hint":          ("Обычный режим — как кент", "Classic — casual chat"),
     "mode_assistant_hint":     ("Помощь по делу, структура", "Helpful, structured"),
     "mode_pro_hint":           ("Размышление и перепроверка (только в ЛС)", "Reasoning & self-check (DM only)"),
     "mode_set":                ("Режим: {0}", "Mode: {0}"),
@@ -78,9 +79,10 @@ TEXTS: dict[str, tuple[str, str]] = {
     # ---- Меню ----
     "menu_title":              ("Кульш AI — главное меню", "Kulsh AI — Main Menu"),
     "menu_intro": (
-        "Открытая языковая модель с набором встроенных инструментов, "
-        "веб-поиском и генерацией инфографики.",
-        "Open-source language model with built-in tools, web search and infographic generation.",
+        "Опенсорсный ИИ-бот с характером: болтает по-человечески, "
+        "ищет в интернете, рисует картинки и делает инфографику.",
+        "Open-source AI bot with a personality: chats naturally, "
+        "searches the web, draws images and makes infographics.",
     ),
     "menu_available":          ("Доступно:", "Available:"),
     "menu_mini_app":           ("Mini App — расширенный чат с ИИ",
@@ -95,10 +97,10 @@ TEXTS: dict[str, tuple[str, str]] = {
     # ---- START ----
     "start_title":             ("🍷🗿 Кульш на связи", "🍷🗿 Kulsh is online"),
     "start_intro": (
-        "Открытая языковая модель с анализом изображений, веб-поиском, "
-        "генерацией инфографики и настройкой под себя. Telegram и Discord.",
-        "Open-source language model with image analysis, web search, "
-        "infographic generation and personal config. Telegram and Discord.",
+        "Опенсорсный ИИ-бот с характером. Понимает картинки, ищет в интернете, "
+        "рисует, делает инфографику и настраивается под тебя. Telegram и Discord.",
+        "Open-source AI bot with a personality. Understands images, searches the web, "
+        "draws, makes infographics and adapts to you. Telegram and Discord.",
     ),
     "start_where":             ("🚀 С чего начать:", "🚀 Where to start:"),
     "start_mini_app":          ("Mini App — расширенный чат с ИИ",
@@ -272,6 +274,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "ds_setting_autoreply":    ("Автоответ: {0}", "Auto-reply: {0}"),
     "ds_setting_random":       ("Рандом: {0}", "Random: {0}"),
     "ds_setting_websearch":    ("Веб-поиск: {0}", "Web search: {0}"),
+    "ds_setting_drawing":      ("Рисование: {0}", "Drawing: {0}"),
     "ds_setting_temp":         ("Температура: {0}", "Temperature: {0}"),
     "ds_setting_prompt_reset": ("Промпт сброшен", "Prompt reset"),
     "ds_setting_prompt_set":   ("Промпт установлен", "Prompt set"),
@@ -326,7 +329,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "<code>кульш вспомни медиа [N]</code> — вспомнить N медиа\n"
         "<code>кульш поиск &lt;запрос&gt;</code> — поиск в интернете\n"
         "<code>кульш график &lt;описание&gt;</code> — сгенерировать инфографику\n"
-        "<code>нарисуй ...</code> — попроси Кульша нарисовать картинку (сам решит и нарисует)\n"
+        "<code>нарисуй ...</code> — попросить Кульша нарисовать (сам решит и нарисует)\n"
         "<code>кульш логи</code> — логи (админам)\n\n"
         "<b>Развлечения:</b>\n"
         "<code>кульш psl</code> — looksmaxxing\n"
@@ -337,8 +340,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "<code>кульш донаты</code> — топ донатеров\n\n"
         "<b>Инструменты (ЛС):</b>\n"
         "Отправь архив/текстовый файл — бот распакует, изменит, соберёт и вернёт.\n\n"
-        "🚀 Mini App: {0}\n"
-        "🔗 GitHub: {1}",
+        "🚀 Mini App: {0}",
         "🍷🗿 <b>Kulsh commands</b>\n\n"
         "<b>General:</b>\n"
         "/start — greeting\n"
@@ -366,8 +368,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "<code>kulsh donations</code> — top donators\n\n"
         "<b>Tools (DM):</b>\n"
         "Send an archive/text file — bot unpacks, edits, repacks and returns it.\n\n"
-        "🚀 Mini App: {0}\n"
-        "🔗 GitHub: {1}",
+        "🚀 Mini App: {0}",
     ),
 }
 

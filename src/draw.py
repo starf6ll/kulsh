@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.46.0
+# Kulsh GPT | v2.47.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -528,10 +528,19 @@ def _draw_text(img: Image.Image, el: JsonDict) -> None:
 
 def _draw_image(img: Image.Image, el: JsonDict) -> None:
     path = el.get("path") or el.get("file")
+    url = el.get("url")
     data = el.get("data")
     overlay: Image.Image | None = None
     if path and os.path.isfile(str(path)):
         overlay = Image.open(str(path)).convert("RGBA")
+    elif isinstance(url, str) and url.startswith("http"):
+        try:
+            dl = _download_to_asset(url)
+            if dl:
+                overlay = Image.open(dl).convert("RGBA")
+        except Exception as e:
+            logger.warning(f"draw image url fail: {e}")
+            overlay = None
     elif isinstance(data, str) and data.startswith("data:"):
         import base64
         try:
@@ -651,7 +660,12 @@ async def run_terminal(command: str) -> TerminalResult:
         return TerminalResult(False, f"команда '{binary}' не разрешена")
 
     if binary in ("curl", "wget"):
-        urls = [a for a in parts[1:] if a.startswith("http") and "://" in a]
+        urls = re.findall(r'https?://[^\s"\'`<>|]+', cmd)
+        if not urls:
+            for a in parts[1:]:
+                a = a.strip('"\'`')
+                if a.startswith("http") and "://" in a:
+                    urls.append(a)
         if not urls:
             return TerminalResult(False, "не нашёл URL в команде")
         paths: list[str] = []
@@ -755,15 +769,84 @@ def _extract_json_block(text: str, marker: str) -> tuple[JsonDict | None, str]:
     return None, (text[:idx]).strip()
 
 
+def extract_draw_parts(text: str) -> tuple[JsonDict | None, str, str]:
+    """Возвращает (spec, before_text, after_text) для блока !draw.
+
+    before_text — текст до блока, after_text — текст после блока (может содержать !separate).
+    """
+    if not text or "!draw" not in text:
+        return None, text, ""
+    m = re.search(r'!draw\s*\n?```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+    if m:
+        try:
+            spec = json_dict(json.loads(m.group(1)))
+            return spec, text[:m.start()].strip(), text[m.end():].strip()
+        except Exception:
+            pass
+    idx = text.find("!draw")
+    if idx < 0:
+        return None, text, ""
+    start = text.find("{", idx)
+    if start < 0:
+        return None, text[:idx].strip(), text[idx + len("!draw"):].strip()
+    depth = 0
+    in_str = False
+    esc = False
+    end = -1
+    for i in range(start, len(text)):
+        c = text[i]
+        if esc:
+            esc = False
+            continue
+        if c == "\\":
+            esc = True
+            continue
+        if c == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end > 0:
+        try:
+            spec = json_dict(json.loads(text[start:end]))
+            return spec, text[:idx].strip(), text[end:].strip()
+        except Exception as e:
+            logger.warning(f"draw json parse fail: {e}")
+            tail = re.sub(r'^\s*```[a-zA-Z]*\s*', '', text[end:]).strip()
+            return None, text[:idx].strip(), tail
+    return None, text[:idx].strip(), ""
+
+
 def extract_draw_marker(text: str) -> tuple[JsonDict | None, str]:
-    return _extract_json_block(text, "!draw")
+    spec, before, after = extract_draw_parts(text)
+    if spec is None:
+        return None, text
+    remaining = (before + (("\n" + after) if after else "")).strip()
+    return spec, remaining
 
 
-async def process_drawing(reply_text: str) -> tuple[BytesIO | None, str, str]:
-    """Обрабатывает !term-команды и !draw-спецификацию из ответа модели.
+class DrawResult:
+    __slots__ = ("png", "before", "after", "status")
 
-    Возвращает (png_or_none, remaining_text, status_message).
-    Текст без маркеров возвращается как remaining_text.
+    def __init__(self, png: BytesIO | None, before: str, after: str, status: str) -> None:
+        self.png = png
+        self.before = before
+        self.after = after
+        self.status = status
+
+
+async def process_drawing(reply_text: str) -> DrawResult:
+    """Обрабатывает !term-команды и !draw-блок из ответа модели.
+
+    Возвращает DrawResult(png, before_text, after_text, status). before_text и
+    after_text — текст до и после блока !draw (в них могут остаться !separate).
     """
     term_cmds, text_wo_term = extract_term_commands(reply_text)
     status_parts: list[str] = []
@@ -771,17 +854,17 @@ async def process_drawing(reply_text: str) -> tuple[BytesIO | None, str, str]:
         res = await run_terminal(cmd)
         status_parts.append(("✓ " if res.ok else "✗ ") + (res.output or cmd)[:200])
 
-    spec, remaining = extract_draw_marker(text_wo_term)
+    spec, before, after = extract_draw_parts(text_wo_term)
     png: BytesIO | None = None
     if spec is not None:
         try:
             png = render_spec(spec)
         except Exception as e:
             logger.error(f"draw render fail: {e}")
-            remaining = (remaining + f"\n\n❌ не смог нарисовать: {e}").strip()
+            after = (after + f"\n\n❌ не смог нарисовать: {e}").strip()
         finally:
             cleanup_assets()
-    return png, remaining, " | ".join(status_parts)
+    return DrawResult(png, before, after, " | ".join(status_parts))
 
 
 

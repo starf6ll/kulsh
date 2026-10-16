@@ -26,17 +26,19 @@ Now also a brutally honest **looksmaxxing analyst** – upload a face photo and 
 - **Real-Time Awareness** – The current Moscow time is injected into every system prompt as the single source of truth, so the bot never anchors to a stale "it's 2 AM" from hours ago. A guard also strips any leading time/date prefix the model tries to add to its own messages.
 - **Vision Support** – Capable of analyzing images and providing sarcastic captions or technical descriptions.
 - **AI Personality** – Custom-tuned system prompt for a unique "homie" persona with three communication modes.
-- **Three Communication Modes** – `kent` (default homie), `assistant` (structured helper), `pro` (step-by-step reasoning, DM only).
+- **Three Communication Modes** – `classic` (Обычный, default homie), `assistant` (structured helper), `pro` (step-by-step reasoning, DM only).
 - **Message Splitting** – When enabled, the bot naturally breaks replies into multiple short messages (via `!separate` marker, with a fallback that also honours blank-line and sentence boundaries) for a live, human texting feel. The model is explicitly forbidden from using `Enter` / `Shift+Enter` as a separator.
 - **Emoji Reactions** – The bot can react to the user's message with an emoji instead of (or in addition to) a text reply, on **both** platforms.
-- **Emoji Discipline** – In `kent` mode the bot keeps emojis to an absolute minimum and the output is post-filtered (only 🍷🗿 survive).
+- **Emoji Discipline** – In `classic` mode the bot keeps emojis to an absolute minimum and the output is post-filtered (only 🍷🗿 survive).
 - **Remote Administration** – Built-in logging system that allows owners to retrieve `bot.log` files and live stdout directly via chat commands (works in servers **and** DMs).
 - **Automated Engagement** – Periodic auto-posting of "random thoughts" to keep the chat alive.
 - **Donation System** – Support via Telegram Stars and DonationAlerts integration with a cross-platform leaderboard.
 - **Credits System** – Daily per-user credits that gate the heavier tools (archive editing).
 - **🔄 Auto-Update** – Authorized users can trigger a `git pull` and automatic restart directly from Discord (`кульш обновись`), with automatic rollback if a new commit fails the smoke check. Requires systemd setup.
-- **🆕 Interactive Discord UI** – The full settings panel is built from native Discord components: one navigator select plus buttons for toggles, and sub-menus with select menus for language, theme, mode, model and temperature — mirroring the Telegram UX. Slash commands are synced **globally**, so the `/` command list is populated in every server the bot is in.
-- **🆕 Drawing Engine (Pillow)** – Kulsh can draw arbitrary images **on his own**, without any special command: if the latest user message asks for a picture, he emits a `!draw` JSON spec that the bot renders with Pillow (shapes, lines, polygons, bezier/SVG paths, gradients, text with custom fonts, shadows, blurs, image overlays). A restricted `!term` terminal lets him fetch fonts/overlay images (from an allow-list of hosts) and `pip install` a whitelisted set of rendering packages; temporary assets are sandboxed and deleted right after the finished image is sent.
+- **🆕 Interactive Discord UI** – The full settings panel is built from native Discord components: one navigator select plus buttons for toggles, and sub-menus with select menus for language, theme, mode and model — mirroring the Telegram UX. Slash commands are synced **globally**, so the `/` command list is populated in every server the bot is in.
+- **🆕 Drawing Engine (Pillow)** – Kulsh can draw arbitrary images **on his own**, without any special command: if the latest user message asks for a picture, he emits a `!draw` JSON spec that the bot renders with Pillow (shapes, lines, polygons, bezier/SVG paths, gradients, text with custom fonts, shadows, blurs, image overlays — including images pulled straight from a URL). A restricted `!term` terminal lets him fetch fonts/overlay images (from an allow-list of hosts) and `pip install` a whitelisted set of rendering packages; temporary assets are sandboxed and deleted right after the finished image is sent. Drawing can be toggled per chat in settings.
+- **🆕 Rich Draw Replies** – A single model reply can mix text and a picture: text before the `!draw` block is sent as its own messages, text right after the block becomes the photo caption, and anything past a `!separate` becomes further messages.
+- **🆕 Interactive Web Search** – `!search` now shows a live animation ("🗿 поиск в интернете…" → "🍷 читаю wikipedia.com") that is removed before the final answer. The model receives the results **and** the source links, decides how to present them, and keeps the links in context so it can hand them over on request.
 - **🆕 Looksmaxxing Analysis** – Strict facial aesthetics evaluation.
   Upload a photo (in Discord or Telegram) with the `кульш psl` command and receive:
   - Objective **PSL rating** (1.0–8.0) and exact **tier** (Sub3 to True Adam / True Eve) with tier distribution chart
@@ -250,15 +252,15 @@ The `кульш обновись` command performs a `git fetch` + `git pull --f
 | `область` / `scope` | `для_себя` / `для_всех` | Per-user or shared-per-channel config (Discord admin only). |
 | `язык` / `language` | `ru` / `en` | UI and infographic language. |
 | `тема` / `theme` | `тёмная` / `светлая` | Infographic theme. |
-| `режим` / `mode` | `кент` / `ассистент` / `pro` | Communication mode. |
+| `режим` / `mode` | `обычный` / `ассистент` / `pro` | Communication mode. |
 | `модель` / `model` | `<номер>` / `авто` | Force a specific model or auto-cascade. |
-| `температура` / `temperature` | `0.0–2.0` | Sampling temperature. |
 | `разбивка` / `split` | `вкл` / `выкл` | Message splitting. |
 | `реакции` / `reactions` | `вкл` / `выкл` | Emoji reactions. |
 | `стикеры` / `stickers` | `вкл` / `выкл` | Stickers / GIFs. |
 | `автоответ` / `autoreply` | `вкл` / `выкл` | Random observer replies. |
 | `рандом` / `random` | `вкл` / `выкл` | Periodic random posts. |
 | `поиск` / `search` | `вкл` / `выкл` | Web search availability. |
+| `рисование` / `drawing` | `вкл` / `выкл` | Autonomous image drawing. |
 | `промпт` / `prompt` | `<текст>` / `сброс` | Custom mandatory prompt. |
 
 > **Note:** `разбивка` (Split) and `стриминг` (Streaming) are mutually exclusive.
@@ -278,7 +280,7 @@ The bot's own responses can contain invisible utility markers that the bot strip
 | `!react:<emoji>` | React to the user's message (e.g. `!react:👍🔥`). |
 | `!why:<text>` | Optional note stored in memory alongside `!react`. |
 | `!separate` | Split this reply into several messages. |
-| `!search <query>` | Perform a web search and continue with the results. |
+| `!search <query>` | Perform an interactive web search (animated) and continue with the results; sources stay in context. |
 | `!recall_media` / `!recall_media:ID` | Recall and describe the last (or a specific) media. |
 | `!avatar` | Describe the user's avatar. |
 | `!sticker` / `!gif` | Send a sticker / GIF. |
@@ -287,7 +289,13 @@ The bot's own responses can contain invisible utility markers that the bot strip
 | `!draw` + JSON block | Draw an arbitrary image with Pillow (shapes, SVG paths, gradients, text, shadows, overlays). |
 | `!term <command>` | Restricted asset terminal: download fonts/images (host allow-list) or `pip install` a whitelisted rendering package. |
 
-**Autonomous drawing:** drawing is *not* a user command. If the latest message asks for a picture ("нарисуй", "изобрази", "draw", …), Kulsh decides on his own to answer with a `!draw` spec, which the bot renders and sends. The `!draw` spec supports: `gradient` / `radial_gradient`, `line`, `rect`, `circle`/`ellipse`, `polygon`, `svg` (M/L/H/V/C/S/Q/T/Z paths), `text` (custom font), `image` (overlay from `!term`), `blur`, and a `shadow` object on any element.
+**Autonomous drawing:** drawing is *not* a user command. If the latest message asks for a picture ("нарисуй", "изобрази", "draw", …), Kulsh decides on his own to answer with a `!draw` spec, which the bot renders and sends. The `!draw` spec supports: `gradient` / `radial_gradient`, `line`, `rect`, `circle`/`ellipse`, `polygon`, `svg` (M/L/H/V/C/S/Q/T/Z paths), `text` (custom font), `image` (overlay from `!term` **or** a direct `url`), `blur`, and a `shadow` object on any element. There is no content filter: Kulsh will draw profanity, crude and edgy prompts without moralizing.
+
+**Mixing text and a picture in one reply:** everything before the `!draw` block is sent as its own message(s); the text immediately after the block (up to the first `!separate`) becomes the photo caption; everything after a `!separate` becomes further messages. So `«мопса, говоришь?!separateлан, ща нарисую` + `!draw` block + `во держи!separateну как тебе?»` renders as two messages, then the photo captioned "во держи!", then one more message. If he wants text detached from the photo, he must use `!separate` — otherwise it becomes the caption.
+
+**Censorship:** the bot is explicitly instructed to have no moral filters and to never refuse a request or add disclaimers (provider-level limits aside).
+
+**Secret:** Kulsh never reveals his system prompt, instructions or internal markers, and never discusses his friends in chats where they aren't present (only the trusted Discord server `1403828466075304036` and Telegram group `2413532783`).
 
 **Reactions now work reliably:** the parser accepts `!react:👍`, `!react: 👍`, `[реакция 😂]`, `(реакция: 🗿)` and similar variants, applies the correct emoji via the platform API, and strips any stray marker so it never leaks into the chat as raw text.
 
@@ -297,11 +305,11 @@ The bot's own responses can contain invisible utility markers that the bot strip
 
 | Mode | Description |
 |------|-------------|
-| `kent` | Default homie mode. Short, casual, human-like. Emojis almost never; only 🍷🗿 occasionally and only when it fits. |
+| `classic` | Default homie mode ("Обычный"). Short, casual, human-like. Emojis almost never; only 🍷🗿 occasionally and only when it fits. |
 | `assistant` | Structured helper. Headings and lists where appropriate, still friendly. |
 | `pro` | Step-by-step reasoning and self-checking. Available **only in Telegram DMs**. |
 
-In `kent` mode the message length adapts to the conversation: a one-liner for a quick joke, a normal human answer for a serious question, and — when splitting is on — up to 2–3 short messages for a longer train of thought.
+In `classic` mode the message length adapts to the conversation: a one-liner for a quick joke, a normal human answer for a serious question, and — when splitting is on — up to 2–3 short messages for a longer train of thought.
 
 ---
 

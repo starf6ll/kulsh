@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.46.0
+# Kulsh GPT | v2.47.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -65,6 +65,7 @@ from src.util import (
     tr,
     AUTHORIZED_UPDATERS,
     GIF_POOL,
+    last_search_sources,
 )
 
 ds_bot: Any = None
@@ -88,6 +89,47 @@ async def typing_with_delay_ds(channel: discord.abc.Messageable, text: str, dela
         except Exception:
             await asyncio.sleep(step)
         elapsed += step
+
+
+SEARCH_ANIM_EMOJIS = ("🗿", "🍷")
+
+
+def _host_of(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+        return (urlparse(url).hostname or "").lstrip("www.")
+    except Exception:
+        return ""
+
+
+async def search_with_anim_ds(message: discord.Message, query: str) -> list[Any]:
+    """Анимация поиска в Discord: плейсхолдер → «читаю домен» → удаление."""
+    status: discord.Message | None = None
+    try:
+        status = await message.reply("🗿 поиск в интернете...")
+    except Exception:
+        status = None
+    results = await web_search(query, max_results=6)
+    if status is not None:
+        domains: list[str] = []
+        for r in results:
+            h = _host_of(r.get("url", ""))
+            if h and h not in domains:
+                domains.append(h)
+        if not domains:
+            domains = ["wikipedia.org", "duckduckgo.com"]
+        for h in domains[:5]:
+            emoji = random.choice(SEARCH_ANIM_EMOJIS)
+            try:
+                await status.edit(content=f"{emoji} читаю {h}")
+            except Exception:
+                pass
+            await asyncio.sleep(0.6)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+    return results
 
 
 async def get_avatar_description_ds(message: discord.Message, chat_id: int, user_id: int, lang: str = "ru") -> str | None:
@@ -294,13 +336,15 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
         if query:
-            results = await web_search(query, max_results=6)
+            results = await search_with_anim_ds(message, query)
             if results:
+                last_search_sources[f"ds_{chat_id}"] = results
                 context = format_search_results(results)
                 follow_prompt = (
                     f"Пользователь спросил: {orig_user_text}\n\n"
                     f"Ты выполнил поиск: {query}\n\nРезультаты:\n{context}\n\n"
-                    f"Ответь кратко. Без !search, !chart."
+                    f"Ответь на основе результатов, живо и по делу. Можешь использовать утилиты (!separate, !draw и др.). "
+                    f"Ссылки вставлять не обязан — они уже у бота в контексте."
                 )
                 answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="ds")
             else:
@@ -375,20 +419,21 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
 
     # ---- draw / term ----
     draw_png = None
-    if "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
+    draw_before = ""
+    draw_after = ""
+    if cfg.get("drawing_enabled", True) and ("!draw" in (answer_raw or "") or "!term" in (answer_raw or "")):
         try:
-            draw_png, answer_raw, term_status = await process_drawing(answer_raw or "")
-            if term_status:
-                logger.info(f"🎨 draw terminal: {term_status}")
-            if draw_png is not None:
-                try:
-                    await message.reply(file=discord.File(fp=draw_png, filename="drawing.png"))
-                except Exception as e:
-                    logger.error(f"ds draw send: {e}")
+            res = await process_drawing(answer_raw or "")
+            draw_png, draw_before, draw_after = res.png, res.before, res.after
+            if res.status:
+                logger.info(f"🎨 draw terminal: {res.status}")
         except Exception as e:
             logger.error(f"ds draw: {e}")
 
-    clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
+    clean_segments, markers = process_ai_response(
+        draw_before if draw_png is not None else answer_raw,
+        separate_enabled=separate_enabled,
+    )
 
     extra_segments: list[str] = []
     if "avatar" in markers:
@@ -450,13 +495,13 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             logger.warning(f"DS user_info ai: {e}")
 
     all_segments = clean_segments + extra_segments
-    if not all_segments:
+    if draw_png is None and not all_segments:
         # Страховка: если в ответе был осмысленный текст, но он схлопнулся в ноль —
         # отправляем его как есть, чтобы ответ не пропал молча.
         fallback = scrub_stray_markers(answer_raw or "").strip()
         if fallback and not markers:
             all_segments = [fallback]
-    if not all_segments:
+    if draw_png is None and not all_segments:
         for m in markers:
             if m in ("sticker", "gif"):
                 try:
@@ -465,19 +510,20 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     logger.warning(f"ds utility: {e}")
         return
 
-    sent_any = False
-    for i, seg in enumerate(all_segments):
+    sent_flag = [False]
+
+    async def _send_seg(seg: str, idx: int) -> None:
         seg = scrub_stray_markers(seg)
         if cfg.get("communication_mode", "kent") == "kent":
             seg = strip_chat_emojis(seg)
         if not seg:
-            continue
+            return
         try:
-            await typing_with_delay_ds(message.channel, seg, delay=calc_typing_delay(seg, segment_index=i))
+            await typing_with_delay_ds(message.channel, seg, delay=calc_typing_delay(seg, segment_index=idx))
         except Exception:
             pass
         try:
-            if i == 0:
+            if idx == 0:
                 try:
                     await message.reply(seg)
                 except Exception as e_reply:
@@ -485,14 +531,34 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     await message.channel.send(seg)
             else:
                 await message.channel.send(seg)
-            sent_any = True
+            sent_flag[0] = True
             add_bot_memory(f"ds_{chat_id}", seg)
         except Exception as e:
             logger.error(
                 f"❌ Не удалось отправить ответ в Discord (channel={chat_id}): {type(e).__name__}: {e}"
             )
 
-    if not sent_any:
+    for i, seg in enumerate(all_segments):
+        await _send_seg(seg, i)
+
+    if draw_png is not None:
+        after_segments, _after_markers = process_ai_response(draw_after, separate_enabled=separate_enabled)
+        caption = ""
+        if after_segments:
+            caption = scrub_stray_markers(after_segments[0])
+            if cfg.get("communication_mode", "kent") == "kent":
+                caption = strip_chat_emojis(caption)
+            caption = caption[:1990]
+        try:
+            await message.reply(file=discord.File(fp=draw_png, filename="drawing.png"), content=caption or None)
+            sent_flag[0] = True
+            add_bot_memory(f"ds_{chat_id}", "[нарисовал картинку]" + (f" {caption}" if caption else ""))
+        except Exception as e:
+            logger.error(f"ds draw send: {e}")
+        for j, seg in enumerate(after_segments[1:], start=1):
+            await _send_seg(seg, j)
+
+    if not sent_flag[0]:
         logger.error(
             f"❌ Ответ сформирован, но НЕ отправлен (channel={chat_id}, "
             f"segments={len(all_segments)}). Проверь права бота: Send Messages / Embed Links / "
@@ -520,6 +586,7 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
     autoreply = tr(lang, "on") if cfg.get("random_reply_enabled", False) else tr(lang, "off")
     random_msgs = tr(lang, "on") if cfg.get("random_messages_enabled", True) else tr(lang, "off")
     websearch = tr(lang, "on") if cfg.get("web_search_enabled", True) else tr(lang, "off")
+    drawing = tr(lang, "on") if cfg.get("drawing_enabled", True) else tr(lang, "off")
     reactions = tr(lang, "on") if cfg.get("reactions_enabled", True) else tr(lang, "off")
     prompt = cfg.get("custom_prompt") or ("стандартный" if lang == "ru" else "default")
     if len(prompt) > 900:
@@ -546,13 +613,13 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="🌓 Тема", value=theme_disp, inline=True)
         embed.add_field(name="🧩 Режим", value=mode_disp, inline=True)
         embed.add_field(name="🧠 Модель", value=model_display_name(cfg.get("model"), lang), inline=True)
-        embed.add_field(name="🎛 Температура", value=str(cfg.get("temperature", 0.9)), inline=True)
         embed.add_field(name="💬 Разбивка", value=sep, inline=True)
         embed.add_field(name="😀 Реакции", value=reactions, inline=True)
         embed.add_field(name="🎨 Стикеры/гифки", value=stickers, inline=True)
         embed.add_field(name="🗣 Автоответ", value=autoreply, inline=True)
         embed.add_field(name="📢 Случайные", value=random_msgs, inline=True)
         embed.add_field(name="🔎 Веб-поиск", value=websearch, inline=True)
+        embed.add_field(name="🎨 Рисование", value=drawing, inline=True)
         embed.add_field(name="🎬 Серия", value=series, inline=True)
         embed.add_field(name="📝 Кастомный промпт", value=prompt, inline=False)
         embed.add_field(
@@ -580,13 +647,13 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="🌓 Theme", value=theme_disp, inline=True)
         embed.add_field(name="🧩 Mode", value=mode_disp, inline=True)
         embed.add_field(name="🧠 Model", value=model_display_name(cfg.get("model"), lang), inline=True)
-        embed.add_field(name="🎛 Temperature", value=str(cfg.get("temperature", 0.9)), inline=True)
         embed.add_field(name="💬 Split", value=sep, inline=True)
         embed.add_field(name="😀 Reactions", value=reactions, inline=True)
         embed.add_field(name="🎨 Stickers/GIFs", value=stickers, inline=True)
         embed.add_field(name="🗣 Auto-reply", value=autoreply, inline=True)
         embed.add_field(name="📢 Random", value=random_msgs, inline=True)
         embed.add_field(name="🔎 Web search", value=websearch, inline=True)
+        embed.add_field(name="🎨 Drawing", value=drawing, inline=True)
         embed.add_field(name="🎬 Series", value=series, inline=True)
         embed.add_field(name="📝 Custom prompt", value=prompt, inline=False)
     return embed
@@ -652,10 +719,10 @@ class DsConfigView(discord.ui.View):
             discord.SelectOption(label=f"{tr(lang, 'cfg_theme')}: {theme_disp}", value="theme"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_mode')}: {mode_disp}", value="mode"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_model')}: {model_disp}", value="model"),
-            discord.SelectOption(label=f"{tr(lang, 'cfg_temp_short')}: {cfg.get('temperature', 0.9)}", value="temp"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_sep')}: {b('separate_enabled')}", value="separate_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_reactions')}: {b('reactions_enabled')}", value="reactions_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_websearch')}: {b('web_search_enabled')}", value="web_search_enabled"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_drawing')}: {b('drawing_enabled')}", value="drawing_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_stickers')}: {b('stickers_enabled')}", value="stickers_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_autoreply')}: {b('random_reply_enabled', False)}", value="random_reply_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_random')}: {b('random_messages_enabled')}", value="random_messages_enabled"),
@@ -733,6 +800,7 @@ class DsConfigView(discord.ui.View):
         value = interaction.data["values"][0]
         toggle_keys = {
             "separate_enabled": True, "reactions_enabled": True, "web_search_enabled": True,
+            "drawing_enabled": True,
             "stickers_enabled": True, "random_reply_enabled": False, "random_messages_enabled": True,
         }
         if value in toggle_keys:
@@ -746,7 +814,7 @@ class DsConfigView(discord.ui.View):
         if value == "prompt":
             await self._on_prompt(interaction)
             return
-        if value in ("lang", "theme", "mode", "model", "temp"):
+        if value in ("lang", "theme", "mode", "model"):
             await self._open_choice(interaction, value)
             return
         await self._refresh_main(interaction)
@@ -864,11 +932,8 @@ class DsChoiceView(discord.ui.View):
             for idx, m in enumerate(MODEL_LIST):
                 options.append(discord.SelectOption(label=MODEL_DISPLAY.get(m, m), value=str(idx), default=cur == m))
             placeholder = tr(lang, "cfg_choose_model")
-        else:  # temp
-            cur = float(cfg.get("temperature", 0.9))
-            options = [discord.SelectOption(label=str(v), value=str(v), default=abs(cur - v) < 0.01)
-                       for v in [0.2, 0.5, 0.7, 0.9, 1.1, 1.3, 1.5]]
-            placeholder = f"{tr(lang, 'cfg_temp_short')}: {cur}"
+        else:
+            placeholder = tr(lang, "cfg_choose_model")
 
         sel = discord.ui.Select(placeholder=placeholder, options=options[:25], row=0)
         sel.callback = self._on_select
@@ -907,11 +972,8 @@ class DsChoiceView(discord.ui.View):
                     cfg["model"] = MODEL_LIST[int(val)]
                 except (ValueError, IndexError):
                     pass
-        else:  # temp
-            try:
-                cfg["temperature"] = float(val)
-            except ValueError:
-                pass
+        else:
+            return
         save_user_configs()
         await p._open_choice(interaction, self.kind)
 
@@ -1017,13 +1079,9 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
     elif param in ("поиск", "search"):
         cfg["web_search_enabled"] = bool_on; save_user_configs()
         await message.reply(tr(lang, "ds_setting_websearch", tr(lang, "on") if bool_on else tr(lang, "off")))
-    elif param in ("температура", "temperature"):
-        try:
-            t = max(0.0, min(2.0, float(val)))
-            cfg["temperature"] = t; save_user_configs()
-            await message.reply(tr(lang, "ds_setting_temp", t))
-        except ValueError:
-            await message.reply(tr(lang, "ds_setting_temp_bad"))
+    elif param in ("рисование", "drawing", "draw"):
+        cfg["drawing_enabled"] = bool_on; save_user_configs()
+        await message.reply(tr(lang, "ds_setting_drawing", tr(lang, "on") if bool_on else tr(lang, "off")))
     elif param in ("промпт", "prompt"):
         new_prompt = " ".join(parts[3:]).strip()
         if new_prompt.lower() in ("сброс", "reset", "убрать", "стандарт", "default"):
@@ -1063,7 +1121,7 @@ def ds_menu_text(lang: str) -> str:
     if lang == "ru":
         return (
             "# ✦ Кульш AI — меню ✦\n\n---\n\n"
-            "Открытая языковая модель с набором инструментов.\n\n"
+            "Опенсорсный ИИ-бот с характером.\n\n"
             "**Основные**\n\n- `/start` — приветствие\n- `/help` — полный список команд\n"
             "- `/status` — состояние бота\n- `/config` — настройки канала\n"
             "- `/donate` — поддержка\n- `/credits` — кредиты\n\n"
@@ -1086,7 +1144,7 @@ def ds_start_text(lang: str) -> str:
     if lang == "ru":
         return (
             "# 🍷🗿 Кульш на связи\n\n---\n\n"
-            "Открытая языковая модель с анализом изображений.\n\n"
+            "Опенсорсный ИИ-бот с характером.\n\n"
             "**🚀 С чего начать**\n\n- `/menu` — все разделы\n- `/help` — команды\n"
             "- `/status` — состояние\n- `/config` — настройки\n\n"
             f"🍷🗿 {MINI_APP_URL}"
@@ -1188,7 +1246,7 @@ async def ds_slash_donate(interaction: discord.Interaction) -> None:
     text = (
         f"# {tr(lang, 'donate_title')}\n\n---\n\n"
         f"{tr(lang, 'donate_intro')}\n\n"
-        f"- {tr(lang, 'donate_online')}: {DONATE_URL}\n- 🔗 GitHub: {GITHUB_URL}"
+        f"- {tr(lang, 'donate_online')}: {DONATE_URL}"
     )
     await interaction.response.send_message(text)
 

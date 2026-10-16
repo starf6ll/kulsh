@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.45.0
+# Kulsh GPT | v2.47.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.46.0"
+BOT_VERSION: str = "2.47.0"
 
 MSK = timezone(timedelta(hours=3))
 
@@ -124,6 +124,23 @@ if not AI_KEYS and AI_KEY:
 DS_SERIES_GUILD_ID = 1403828466075304036
 DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
+
+# Чаты, где Кульшу разрешено говорить о своих кентах и внутренностях.
+TRUSTED_TG_CHAT_ID = 2413532783
+TRUSTED_DS_GUILD_ID = 1403828466075304036
+trusted_ds_channels: set[int] = set()
+
+
+def register_ds_channel(chat_id: int, guild_id: int | None) -> None:
+    """Запоминает каналы «доверенного» сервера, чтобы промпт мог это учитывать."""
+    if guild_id == TRUSTED_DS_GUILD_ID:
+        trusted_ds_channels.add(chat_id)
+
+
+def is_trusted_chat(platform: str, chat_id: int) -> bool:
+    if platform == "tg":
+        return chat_id == TRUSTED_TG_CHAT_ID
+    return chat_id in trusted_ds_channels
 
 MINI_APP_URL = "https://kulsh.vercel.app"
 DONATE_URL = "https://kulsh.vercel.app/donate"
@@ -265,6 +282,10 @@ Font: TypeAlias = ImageFont.FreeTypeFont | ImageFont.ImageFont
 SearchHit: TypeAlias = dict[str, str]
 ChartTheme: TypeAlias = dict[str, Any]
 SeriesSpec: TypeAlias = dict[str, Any]
+
+# Последние результаты поиска по чату — чтобы бот мог выдать источники по просьбе,
+# даже если не вставил их в сам ответ.
+last_search_sources: dict[str, list[SearchHit]] = {}
 HandlerT = TypeVar("HandlerT", bound=Callable[..., Any])
 
 
@@ -527,11 +548,11 @@ DEFAULT_USER_CONFIG = {
     "model": None,
     "language": "ru",
     "theme": "dark",
-    "temperature": 0.9,
     "separate_enabled": True,
     "streaming_enabled": False,
     "tools_enabled": False,
     "web_search_enabled": True,
+    "drawing_enabled": True,
     "communication_mode": DEFAULT_COMMUNICATION_MODE,
     "reactions_enabled": True,
 }
@@ -821,7 +842,7 @@ STRAY_EXTRA_PATTERNS = (
     re.compile(r'!\s*term\b[^\n]*', re.IGNORECASE),
 )
 SEPARATOR_PATTERN = re.compile(
-    r'!+\s*sep[ae]rate(?![A-Za-z])',
+    r'!+\s*sep(?:[ae]rate)?(?![A-Za-z])',
     re.IGNORECASE,
 )
 # Реакция: допускаем пробелы, скобки и префикс «реакция», например:
@@ -981,10 +1002,10 @@ def scrub_stray_markers(text: str) -> str:
 
 _TIME_PREFIX_RE = re.compile(
     r'^\s*'
-    # Вариант 1: HH:MM[:SS] [МСК] — опционально в скобках и с разделителем после.
+    # Вариант 1: HH:MM[:SS] [МСК] [ (возраст) ] — опционально в скобках и с разделителем после.
     r'(?:'
-    r'\[\s*\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*\]'
-    r'|\(\s*(?:(?:сегодня|today)\s+)?\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*\)'
+    r'\[\s*\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*(?:\([^)\]]*\))?\s*\]'
+    r'|\(\s*(?:(?:сегодня|today)\s+)?\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*(?:\([^)]*\))?\s*\)'
     r'|\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*[:：\-—]'
     r')'
     r'\s*'

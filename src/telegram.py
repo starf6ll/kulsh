@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.46.0
+# Kulsh GPT | v2.47.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -56,7 +56,6 @@ from src.ui import (
     build_mode_keyboard,
     build_model_keyboard,
     build_start_keyboard,
-    build_temp_keyboard,
     build_theme_keyboard,
 )
 from src.util import (
@@ -104,6 +103,7 @@ from src.util import (
     long_term_memory,
     pending_donations,
     prompt_waiting,
+    last_search_sources,
     save_long_term_memory,
 )
 import src.util as state
@@ -360,23 +360,9 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(cb_id(call), toast)
         return
 
-    if action == "temp":
-        await edit_or_send(call, f"# {tr(lang, 'cfg_temp_short')}\n\n---\n",
-                            build_temp_keyboard("tg", chat_id, user_id))
+    if action == "temp" or action == "temp_set":
+        # Температура убрана из настроек.
         await tg_bot.answer_callback_query(cb_id(call))
-        return
-
-    if action == "temp_set":
-        try:
-            temp_val = max(0.0, min(2.0, float(parts[2])))
-            cfg["temperature"] = temp_val
-            toast = tr(lang, "cfg_temp", temp_val)
-            save_user_configs()
-        except (ValueError, IndexError):
-            pass
-        await edit_or_send(call, config_text("tg", chat_id, user_id),
-                            build_main_config_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(cb_id(call), toast)
         return
 
     if action == "prompt":
@@ -438,6 +424,9 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
     elif action == "websearch":
         cfg["web_search_enabled"] = not cfg.get("web_search_enabled", True)
         save_user_configs()
+    elif action == "drawing":
+        cfg["drawing_enabled"] = not cfg.get("drawing_enabled", True)
+        save_user_configs()
     elif action == "reactions":
         cfg["reactions_enabled"] = not cfg.get("reactions_enabled", True)
         toast = tr(lang, "cfg_reactions_on") if cfg["reactions_enabled"] else tr(lang, "cfg_reactions_off")
@@ -456,6 +445,9 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         last_random_reply.pop(chat_key, None)
         last_old_reply.pop(chat_key, None)
         toast = tr(lang, "cfg_memory_reset")
+        # Текст настроек не меняется — не трогаем сообщение, чтобы не слетало форматирование.
+        await tg_bot.answer_callback_query(cb_id(call), toast)
+        return
 
     await edit_or_send(call, config_text("tg", chat_id, user_id),
                         build_main_config_keyboard("tg", chat_id, user_id))
@@ -813,31 +805,19 @@ async def tg_handle_search(message: types.Message, query: str, chat_id: int, use
     if not query.strip():
         await reply_tg_html(message, tr(lang, "search_need_query"))
         return
-    status = await tg_bot.send_message(chat_id, tr(lang, "search_starting", query))
-    results = await web_search(query, max_results=6)
-    try:
-        await tg_bot.delete_message(chat_id, status.message_id)
-    except Exception:
-        pass
+    results = await search_with_anim_tg(chat_id, message.message_id, query)
     if not results:
         await reply_tg_html(message, tr(lang, "search_nothing"))
         return
+    last_search_sources[f"tg_{chat_id}"] = results
     context = format_search_results(results)
     prompt = (
-        f"Пользователь искал в интернете: {query}\n\nНайденные результаты:\n{context}\n\n"
-        f"Сформулируй краткий ответ (3-6 предложений) на основе этих результатов. "
-        f"Если результаты не по теме — скажи об этом. Не выдумывай факты. "
-        f"Без маркеров !search, !chart, !separate."
+        f"Пользователь просит поискать: {query}\n\nНайденные результаты:\n{context}\n\n"
+        f"Ответь сам, как расписать — живо и по делу, можно сводкой или парой фраз. "
+        f"Ссылки в текст вставлять не обязан, они уже у тебя в контексте."
     )
     answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg")
-    header = f"🔎 **{query}**\n\n"
-    full = header + "\n" + (answer or "")
-    sources: list[str] = []
-    for i, r in enumerate(results[:4], 1):
-        sources.append(f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})")
-    if sources:
-        full += "\n\n**" + tr(lang, "search_source") + ":**\n" + "\n".join(sources)
-    await send_formatted(chat_id, full, reply_to=message.message_id)
+    await send_formatted(chat_id, answer or tr(lang, "search_nothing"), reply_to=message.message_id)
 
 
 async def tg_handle_chart_request(message: types.Message, description: str,
@@ -1082,6 +1062,47 @@ async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tru
 # ============================================================
 # SEND TG AI RESPONSE
 # ============================================================
+SEARCH_ANIM_EMOJIS = ("🗿", "🍷")
+
+
+def _host_of(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+        return (urlparse(url).hostname or "").lstrip("www.")
+    except Exception:
+        return ""
+
+
+async def search_with_anim_tg(chat_id: int, reply_to: int | None, query: str) -> list[Any]:
+    """Показывает анимацию поиска, возвращает результаты и убирает сообщение."""
+    status = None
+    try:
+        status = await tg_bot.send_message(chat_id, "🗿 поиск в интернете...", reply_to_message_id=reply_to)
+    except Exception:
+        status = None
+    results = await web_search(query, max_results=6)
+    if status is not None:
+        domains: list[str] = []
+        for r in results:
+            h = _host_of(r.get("url", ""))
+            if h and h not in domains:
+                domains.append(h)
+        if not domains:
+            domains = ["wikipedia.org", "duckduckgo.com"]
+        for h in domains[:5]:
+            emoji = random.choice(SEARCH_ANIM_EMOJIS)
+            try:
+                await tg_bot.edit_message_text(f"{emoji} читаю {h}", chat_id, status.message_id)
+            except Exception:
+                pass
+            await asyncio.sleep(0.6)
+        try:
+            await tg_bot.delete_message(chat_id, status.message_id)
+        except Exception:
+            pass
+    return results
+
+
 async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int,
                               answer_raw: str, user_text: str | None = None,
                               user_images: list[bytes] | None = None) -> None:
@@ -1101,13 +1122,15 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
         if query:
-            results = await web_search(query, max_results=6)
+            results = await search_with_anim_tg(chat_id, message.message_id, query)
             if results:
+                last_search_sources[f"tg_{chat_id}"] = results
                 context = format_search_results(results)
                 follow_prompt = (
                     f"Пользователь спросил: {orig_user_text}\n\n"
                     f"Ты выполнил поиск: {query}\n\nРезультаты:\n{context}\n\n"
-                    f"Ответь на основе результатов. Без !search, !chart, !react. Краткий ответ."
+                    f"Ответь на основе результатов, живо и по делу. Можешь использовать утилиты (!separate, !draw и др.). "
+                    f"Ссылки в текст вставлять не обязан — они уже у бота в контексте."
                 )
                 answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg")
             else:
@@ -1216,24 +1239,23 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
                 answer_raw = remaining
 
     # ---- draw / term ----
-    if "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
+    draw_png = None
+    draw_before = ""
+    draw_after = ""
+    if cfg.get("drawing_enabled", True) and ("!draw" in (answer_raw or "") or "!term" in (answer_raw or "")):
         try:
-            draw_png, answer_raw, term_status = await process_drawing(answer_raw or "")
-            if term_status:
-                logger.info(f"🎨 draw terminal: {term_status}")
-            if draw_png is not None:
-                try:
-                    await tg_bot.send_photo(
-                        chat_id, InputFile(draw_png, file_name="drawing.png"),
-                        reply_to_message_id=message.message_id,
-                    )
-                except Exception as e:
-                    logger.error(f"tg draw send: {e}")
+            res = await process_drawing(answer_raw or "")
+            draw_png, draw_before, draw_after = res.png, res.before, res.after
+            if res.status:
+                logger.info(f"🎨 draw terminal: {res.status}")
         except Exception as e:
             logger.error(f"tg draw: {e}")
 
     # Разбиение на сегменты
-    clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
+    clean_segments, markers = process_ai_response(
+        draw_before if draw_png is not None else answer_raw,
+        separate_enabled=separate_enabled,
+    )
 
     extra_segments: list[str] = []
     if "avatar" in markers:
@@ -1249,11 +1271,11 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
 
     all_segments = clean_segments + extra_segments
 
-    if not all_segments:
+    if draw_png is None and not all_segments:
         fallback = scrub_stray_markers(answer_raw or "").strip()
         if fallback and not markers:
             all_segments = [fallback]
-    if not all_segments:
+    if draw_png is None and not all_segments:
         for m in markers:
             try:
                 await execute_utility_tg(message, m, chat_id, user_id)
@@ -1263,42 +1285,61 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
 
     is_private_chat = (message.chat.type == 'private')
 
-    for i, seg in enumerate(all_segments):
+    async def _send_seg(seg: str, idx: int) -> None:
         seg = scrub_stray_markers(seg)
         if cfg.get("communication_mode", "kent") == "kent":
             seg = strip_chat_emojis(seg)
         if not seg:
-            continue
+            return
         try:
-            await typing_with_delay_tg(message.chat.id, seg, delay=calc_typing_delay(seg, segment_index=i))
+            await typing_with_delay_tg(message.chat.id, seg, delay=calc_typing_delay(seg, segment_index=idx))
         except Exception:
             pass
-
-        if streaming and i == 0 and len(seg) > 60 and is_private_chat:
+        if streaming and idx == 0 and len(seg) > 60 and is_private_chat:
             try:
                 await stream_text_via_drafts(message.chat.id, seg, is_private=True)
             except Exception as e:
                 logger.debug(f"stream fail: {e}")
-
         sent_ok = False
         try:
             sent_ok = await send_rich_message(
                 message.chat.id, seg,
-                reply_to=message.message_id if i == 0 else None,
+                reply_to=message.message_id if idx == 0 else None,
             )
         except Exception as e:
             logger.debug(f"rich fail: {e}")
-
         if not sent_ok:
             try:
-                if i == 0:
+                if idx == 0:
                     await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
                 else:
                     await send_tg_html(message.chat.id, seg)
             except Exception as e:
                 logger.error(f"send_tg_html fail: {e}")
-
         add_bot_memory(f"tg_{message.chat.id}", seg)
+
+    for i, seg in enumerate(all_segments):
+        await _send_seg(seg, i)
+
+    if draw_png is not None:
+        after_segments, _after_markers = process_ai_response(draw_after, separate_enabled=separate_enabled)
+        caption = ""
+        if after_segments:
+            caption = scrub_stray_markers(after_segments[0])
+            if cfg.get("communication_mode", "kent") == "kent":
+                caption = strip_chat_emojis(caption)
+            caption = caption[:1024]
+        try:
+            await tg_bot.send_photo(
+                chat_id, InputFile(draw_png, file_name="drawing.png"),
+                caption=caption or None,
+                reply_to_message_id=message.message_id,
+            )
+            add_bot_memory(f"tg_{message.chat.id}", "[нарисовал картинку]" + (f" {caption}" if caption else ""))
+        except Exception as e:
+            logger.error(f"tg draw send: {e}")
+        for j, seg in enumerate(after_segments[1:], start=1):
+            await _send_seg(seg, j)
 
     for m in markers:
         if m in ("sticker", "gif"):

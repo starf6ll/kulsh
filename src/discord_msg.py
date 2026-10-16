@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.46.0
+# Kulsh GPT | v2.47.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -21,6 +21,7 @@ from src.discord_cmds import (
     ds_handle_config,
     ds_handle_config_param,
     get_avatar_description_ds,
+    search_with_anim_ds,
     send_ds_ai_response,
 )
 from src.looks import (
@@ -67,6 +68,8 @@ from src.util import (
     extract_video_frame,
     is_battle_command,
     is_looksmaxxing_command,
+    last_search_sources,
+    register_ds_channel,
 )
 from src import discord_cmds as dcmd
 
@@ -102,6 +105,7 @@ async def on_message(message: discord.Message) -> None:
     # ВАЖНО: chat_id всегда channel.id, чтобы совпадать с настройками.
     chat_id = message.channel.id
     user_id = message.author.id
+    register_ds_channel(chat_id, guild.id if guild else None)
     content_lower = message.content.lower()
     display_name = str(getattr(message.author, "display_name", message.author.name))
     username = message.author.name
@@ -181,22 +185,18 @@ async def on_message(message: discord.Message) -> None:
         if not cfg.get("web_search_enabled", True):
             await message.reply(tr(lang, "search_off"))
             return
-        async with message.channel.typing():
-            results = await web_search(m.group(1).strip(), max_results=6)
-            if not results:
-                await message.reply(tr(lang, "search_nothing"))
-                return
-            context = format_search_results(results)
-            prompt = (
-                f"Пользователь искал: {m.group(1).strip()}\n\nРезультаты:\n{context}\n\n"
-                f"Дай краткий ответ. Без !search, !chart."
-            )
-            answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds")
-            full = f"🔎 **{m.group(1).strip()}**\n\n{answer or ''}"
-            sources = [f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})" for i, r in enumerate(results[:4], 1)]
-            if sources:
-                full += "\n\n**" + tr(lang, "search_source") + ":**\n" + "\n".join(sources)
-            await message.reply(full[:1900])
+        results = await search_with_anim_ds(message, m.group(1).strip())
+        if not results:
+            await message.reply(tr(lang, "search_nothing"))
+            return
+        last_search_sources[f"ds_{chat_id}"] = results
+        context = format_search_results(results)
+        prompt = (
+            f"Пользователь просит поискать: {m.group(1).strip()}\n\nРезультаты:\n{context}\n\n"
+            f"Ответь сам, живо и по делу. Ссылки вставлять не обязан, они у тебя в контексте."
+        )
+        answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds")
+        await message.reply((answer or tr(lang, "search_nothing"))[:1900])
         return
 
     m = re.match(r'(?i)^(?:кульш\s+)?(?:график|chart|инфографика|диаграмма)\s+(.+)$', message.content.strip(), re.DOTALL)
