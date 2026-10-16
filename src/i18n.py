@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.45.0
+# Kulsh GPT | v2.46.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -305,6 +305,9 @@ TEXTS: dict[str, tuple[str, str]] = {
     "ds_no_memory":            ("не нашёл ничего в памяти", "nothing found in memory"),
     "ds_avatar_none":          ("не смог получить аватарку", "failed to fetch avatar"),
     "ds_logs_content":         ("🍷🗿 Логи сервера:", "🍷🗿 Server logs:"),
+    "ds_prompt_ask":           ("отправь новый промпт следующим сообщением (или `отмена`)",
+                                "send the new prompt as your next message (or `cancel`)"),
+    "ds_menu_placeholder":     ("⚙️ Выбери раздел", "⚙️ Pick a section"),
 
     "help_body": (
         "🍷🗿 <b>Команды Кульша</b>\n\n"
@@ -323,6 +326,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "<code>кульш вспомни медиа [N]</code> — вспомнить N медиа\n"
         "<code>кульш поиск &lt;запрос&gt;</code> — поиск в интернете\n"
         "<code>кульш график &lt;описание&gt;</code> — сгенерировать инфографику\n"
+        "<code>нарисуй ...</code> — попроси Кульша нарисовать картинку (сам решит и нарисует)\n"
         "<code>кульш логи</code> — логи (админам)\n\n"
         "<b>Развлечения:</b>\n"
         "<code>кульш psl</code> — looksmaxxing\n"
@@ -351,6 +355,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "<code>kulsh recall [N]</code> — recall N media\n"
         "<code>kulsh search &lt;query&gt;</code> — web search\n"
         "<code>kulsh chart &lt;description&gt;</code> — generate infographic\n"
+        "<code>draw ...</code> — ask Kulsh to draw an image (he decides and draws it himself)\n"
         "<code>kulsh logs</code> — logs (admins)\n\n"
         "<b>Entertainment:</b>\n"
         "<code>kulsh psl</code> — looksmaxxing\n"

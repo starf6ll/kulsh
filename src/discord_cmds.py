@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.45.0
+# Kulsh GPT | v2.46.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -15,6 +15,7 @@ from discord import app_commands
 
 from src.ai import extract_search_marker, format_search_results, ask_ai_async, web_search, user_wants_chart
 from src.charts import extract_chart_marker, render_infographic
+from src.draw import process_drawing
 from src.looks import (
     create_battle_infographic,
     create_femboy_battle_infographic,
@@ -143,6 +144,67 @@ def _ds_bot_user() -> discord.ClientUser | None:
         return ds_bot.user if ds_bot else None
     except Exception:
         return None
+
+
+async def fetch_group_info_ds(message: discord.Message, lang: str = "ru") -> str | None:
+    """Инфо о сервере/канале — Discord-аналог fetch_group_info_tg."""
+    guild = message.guild
+    if guild is None:
+        return None
+    lines: list[str] = []
+    lines.append(("Название: " if lang == "ru" else "Name: ") + (guild.name or "?"))
+    lines.append(f"ID: {guild.id}")
+    if guild.owner_id:
+        lines.append(("Владелец ID: " if lang == "ru" else "Owner ID: ") + str(guild.owner_id))
+    lines.append(("Участников: " if lang == "ru" else "Members: ") + str(guild.member_count or "?"))
+    lines.append(("Бустов: " if lang == "ru" else "Boosts: ") + str(guild.premium_subscription_count or 0))
+    if guild.created_at:
+        lines.append(("Создан: " if lang == "ru" else "Created: ") + guild.created_at.strftime('%d.%m.%Y'))
+    if guild.description:
+        lines.append(("Описание: " if lang == "ru" else "Description: ") + str(guild.description)[:300])
+    lines.append(("Текущий канал: " if lang == "ru" else "Current channel: ")
+                 + getattr(message.channel, "name", "?"))
+    return "\n".join(lines)
+
+
+async def fetch_user_info_ds(message: discord.Message, user_id: int, lang: str = "ru") -> str | None:
+    """Инфо о пользователе — Discord-аналог fetch_user_info_tg."""
+    target = None
+    me = _ds_bot_user()
+    if message.mentions:
+        for m in message.mentions:
+            if me is None or m.id != me.id:
+                target = m
+                break
+    if target is None and message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
+        target = message.reference.resolved.author
+    if target is None and (message.guild is None or user_id == message.author.id):
+        target = message.author
+    if target is None and message.guild is not None:
+        try:
+            target = message.guild.get_member(user_id) or await message.guild.fetch_member(user_id)
+        except Exception:
+            target = None
+    if target is None:
+        return None
+    lines: list[str] = []
+    lines.append(("Имя: " if lang == "ru" else "Name: ") + str(getattr(target, "display_name", "?")))
+    lines.append(f"@username: @{getattr(target, 'name', '?')}")
+    lines.append(f"ID: {target.id}")
+    nick = getattr(target, "nick", None)
+    if nick:
+        lines.append(("Ник: " if lang == "ru" else "Nickname: ") + str(nick))
+    roles = getattr(target, "roles", None)
+    if roles:
+        role_names = [r.name for r in roles if r.name != "@everyone"]
+        if role_names:
+            lines.append(("Роли: " if lang == "ru" else "Roles: ") + ", ".join(role_names[:8]))
+    joined = getattr(target, "joined_at", None)
+    if joined:
+        lines.append(("Вступил: " if lang == "ru" else "Joined: ") + joined.strftime('%d.%m.%Y'))
+    if getattr(target, "bot", False):
+        lines.append(("Бот: " if lang == "ru" else "Bot: ") + ("да" if lang == "ru" else "yes"))
+    return "\n".join(lines)
 
 
 async def fetch_last_media_ds(chat_id: int) -> tuple[bytes | None, str, int | None]:
@@ -311,6 +373,21 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
 
+    # ---- draw / term ----
+    draw_png = None
+    if "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
+        try:
+            draw_png, answer_raw, term_status = await process_drawing(answer_raw or "")
+            if term_status:
+                logger.info(f"🎨 draw terminal: {term_status}")
+            if draw_png is not None:
+                try:
+                    await message.reply(file=discord.File(fp=draw_png, filename="drawing.png"))
+                except Exception as e:
+                    logger.error(f"ds draw send: {e}")
+        except Exception as e:
+            logger.error(f"ds draw: {e}")
+
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
     extra_segments: list[str] = []
@@ -324,8 +401,61 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             logger.warning(f"DS avatar: {e}")
     if "recall_media" in markers:
         markers.remove("recall_media")
+    if "group_info" in markers:
+        markers.remove("group_info")
+        try:
+            info = await fetch_group_info_ds(message, lang=lang)
+        except Exception as e:
+            logger.warning(f"DS group_info: {e}")
+            info = None
+        if info:
+            follow_prompt = (
+                f"Пользователь попросил инфо о текущем сервере. Данные:\n{info}\n\n"
+                f"Кратко перескажи в своём стиле. Маленькими буквами. Без маркеров."
+            )
+        else:
+            follow_prompt = "Не удалось получить инфо о сервере. Скажи кратко."
+        try:
+            gi_answer = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="ds")
+            if gi_answer and gi_answer.strip():
+                extra_segments.extend(clean_extra_text(gi_answer))
+        except Exception as e:
+            logger.warning(f"DS group_info ai: {e}")
+    if "user_info" in markers:
+        markers.remove("user_info")
+        target_uid = user_id
+        m_ui = re.search(r'!\s*user[\s_]*info\s*:?\s*(\d+)', answer_raw or "", re.IGNORECASE)
+        if m_ui:
+            try:
+                target_uid = int(m_ui.group(1))
+            except ValueError:
+                target_uid = user_id
+        try:
+            info = await fetch_user_info_ds(message, target_uid, lang=lang)
+        except Exception as e:
+            logger.warning(f"DS user_info: {e}")
+            info = None
+        if info:
+            follow_prompt = (
+                f"Пользователь попросил инфо о пользователе id {target_uid}. Данные:\n{info}\n\n"
+                f"Кратко перескажи в своём стиле. Без маркеров."
+            )
+        else:
+            follow_prompt = "Не удалось получить инфо о пользователе. Скажи об этом."
+        try:
+            ui_answer = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="ds")
+            if ui_answer and ui_answer.strip():
+                extra_segments.extend(clean_extra_text(ui_answer))
+        except Exception as e:
+            logger.warning(f"DS user_info ai: {e}")
 
     all_segments = clean_segments + extra_segments
+    if not all_segments:
+        # Страховка: если в ответе был осмысленный текст, но он схлопнулся в ноль —
+        # отправляем его как есть, чтобы ответ не пропал молча.
+        fallback = scrub_stray_markers(answer_raw or "").strip()
+        if fallback and not markers:
+            all_segments = [fallback]
     if not all_segments:
         for m in markers:
             if m in ("sticker", "gif"):
@@ -335,6 +465,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     logger.warning(f"ds utility: {e}")
         return
 
+    sent_any = False
     for i, seg in enumerate(all_segments):
         seg = scrub_stray_markers(seg)
         if cfg.get("communication_mode", "kent") == "kent":
@@ -345,14 +476,28 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             await typing_with_delay_ds(message.channel, seg, delay=calc_typing_delay(seg, segment_index=i))
         except Exception:
             pass
-        if i == 0:
-            try:
-                await message.reply(seg)
-            except Exception:
+        try:
+            if i == 0:
+                try:
+                    await message.reply(seg)
+                except Exception as e_reply:
+                    logger.warning(f"DS reply failed ({e_reply}); fallback to channel.send")
+                    await message.channel.send(seg)
+            else:
                 await message.channel.send(seg)
-        else:
-            await message.channel.send(seg)
-        add_bot_memory(f"ds_{chat_id}", seg)
+            sent_any = True
+            add_bot_memory(f"ds_{chat_id}", seg)
+        except Exception as e:
+            logger.error(
+                f"❌ Не удалось отправить ответ в Discord (channel={chat_id}): {type(e).__name__}: {e}"
+            )
+
+    if not sent_any:
+        logger.error(
+            f"❌ Ответ сформирован, но НЕ отправлен (channel={chat_id}, "
+            f"segments={len(all_segments)}). Проверь права бота: Send Messages / Embed Links / "
+            f"Attach Files / Read Message History в этом канале."
+        )
 
     for m in markers:
         if m in ("sticker", "gif"):
@@ -447,18 +592,343 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
     return embed
 
 
+# ============================================================
+# INTERACTIVE CONFIG VIEW (buttons + selects, TG-style UX)
+# ============================================================
+def _cfg_lang(chat_id: int, user_id: int) -> str:
+    return str(get_effective_config("ds", chat_id, user_id).get("language", "ru"))
+
+
+def _bool_label(cfg: JsonDict, key: str, default: bool = True) -> str:
+    return "✅" if cfg.get(key, default) else "❌"
+
+
+class DsConfigView(discord.ui.View):
+    """Интерактивная панель настроек (аналог TG-клавиатуры).
+
+    Discord-ограничения: одна action-row = либо до 5 кнопок, либо ровно один
+    select. Всего не больше 5 строк на сообщение. Поэтому — один главный
+    select-навигатор + кнопки, а выбор значений открывается в под-вьюхе.
+    """
+
+    def __init__(self, chat_id: int, user_id: int, is_admin: bool, is_dm: bool = False) -> None:
+        super().__init__(timeout=600)
+        self.chat_id = chat_id
+        self.user_id = user_id
+        self.is_admin = is_admin
+        self.is_dm = is_dm
+        self._rebuild()
+
+    # --- helpers ---
+    def _scope(self) -> str:
+        return get_ds_scope(self.chat_id)
+
+    def _can_edit(self) -> bool:
+        return self.is_admin or self._scope() == "self"
+
+    def _write(self) -> JsonDict:
+        return get_write_config("ds", self.chat_id, self.user_id)
+
+    def _lang(self) -> str:
+        return str(get_effective_config("ds", self.chat_id, self.user_id).get("language", "ru"))
+
+    def _rebuild(self) -> None:
+        self.clear_items()
+        cfg = get_effective_config("ds", self.chat_id, self.user_id)
+        lang = self._lang()
+        disabled = not self._can_edit()
+
+        def b(key: str, default: bool = True) -> str:
+            return "✅" if cfg.get(key, default) else "❌"
+
+        theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
+        mode_raw = str(cfg.get("communication_mode", "kent"))
+        mode_disp = (tr(lang, "mode_assistant") if mode_raw == "assistant"
+                     else (tr(lang, "mode_pro") if mode_raw == "pro" else tr(lang, "mode_kent")))
+        model_disp = model_display_name(cfg.get("model"), lang)
+
+        options = [
+            discord.SelectOption(label=f"{tr(lang, 'cfg_lang')}: {tr(lang, 'russian') if lang == 'ru' else tr(lang, 'english')}", value="lang"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_theme')}: {theme_disp}", value="theme"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_mode')}: {mode_disp}", value="mode"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_model')}: {model_disp}", value="model"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_temp_short')}: {cfg.get('temperature', 0.9)}", value="temp"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_sep')}: {b('separate_enabled')}", value="separate_enabled"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_reactions')}: {b('reactions_enabled')}", value="reactions_enabled"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_websearch')}: {b('web_search_enabled')}", value="web_search_enabled"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_stickers')}: {b('stickers_enabled')}", value="stickers_enabled"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_autoreply')}: {b('random_reply_enabled', False)}", value="random_reply_enabled"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_random')}: {b('random_messages_enabled')}", value="random_messages_enabled"),
+            discord.SelectOption(label=tr(lang, "cfg_edit_prompt"), value="prompt"),
+        ]
+        main_sel = discord.ui.Select(placeholder=tr(lang, "ds_menu_placeholder"),
+                                     options=options, row=0, disabled=disabled)
+        main_sel.callback = self._on_main
+        self.add_item(main_sel)
+
+        b_prompt = discord.ui.Button(label=tr(lang, "cfg_edit_prompt"),
+                                     style=discord.ButtonStyle.primary, row=1, disabled=disabled)
+        b_prompt.callback = self._on_prompt
+        self.add_item(b_prompt)
+
+        b_reset_mem = discord.ui.Button(label=tr(lang, "cfg_reset_memory"),
+                                        style=discord.ButtonStyle.danger, row=1, disabled=disabled)
+        b_reset_mem.callback = self._on_reset_memory
+        self.add_item(b_reset_mem)
+
+        b_reset_prompt = discord.ui.Button(label=tr(lang, "cfg_reset_prompt"),
+                                           style=discord.ButtonStyle.danger, row=1, disabled=disabled)
+        b_reset_prompt.callback = self._on_reset_prompt
+        self.add_item(b_reset_prompt)
+
+        b_apply = discord.ui.Button(label=tr(lang, "cfg_apply_close"),
+                                    style=discord.ButtonStyle.success, row=2)
+        b_apply.callback = self._on_apply
+        self.add_item(b_apply)
+
+        if self.is_admin:
+            scope = self._scope()
+            scope_label = ("🌐 " + ("Общие" if lang == "ru" else "Shared")) if scope == "shared" \
+                else ("👤 " + ("Личные" if lang == "ru" else "Per-user"))
+            b_scope = discord.ui.Button(label=scope_label, style=discord.ButtonStyle.secondary, row=2)
+            b_scope.callback = self._on_scope
+            self.add_item(b_scope)
+
+    # --- shared helpers ---
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(tr(self._lang(), "cfg_not_yours"), ephemeral=True)
+            return False
+        if not self._can_edit():
+            await interaction.response.send_message(tr(self._lang(), "ds_only_admins"), ephemeral=True)
+            return False
+        return True
+
+    async def _refresh_main(self, interaction: discord.Interaction) -> None:
+        self._rebuild()
+        embed = ds_config_embed(self.chat_id, self.user_id)
+        try:
+            await interaction.response.edit_message(embed=embed, view=self)
+        except Exception:
+            try:
+                await interaction.edit_original_response(embed=embed, view=self)
+            except Exception:
+                pass
+
+    async def _open_choice(self, interaction: discord.Interaction, kind: str) -> None:
+        self._rebuild()
+        sub = DsChoiceView(self, kind)
+        embed = ds_config_embed(self.chat_id, self.user_id)
+        try:
+            await interaction.response.edit_message(embed=embed, view=sub)
+        except Exception:
+            try:
+                await interaction.edit_original_response(embed=embed, view=sub)
+            except Exception:
+                pass
+
+    async def _on_main(self, interaction: discord.Interaction) -> None:
+        if not await self._guard(interaction):
+            return
+        value = interaction.data["values"][0]
+        toggle_keys = {
+            "separate_enabled": True, "reactions_enabled": True, "web_search_enabled": True,
+            "stickers_enabled": True, "random_reply_enabled": False, "random_messages_enabled": True,
+        }
+        if value in toggle_keys:
+            cfg = self._write()
+            cfg[value] = not cfg.get(value, toggle_keys[value])
+            if cfg.get("separate_enabled", True) and cfg.get("streaming_enabled", False):
+                cfg["streaming_enabled"] = False
+            save_user_configs()
+            await self._refresh_main(interaction)
+            return
+        if value == "prompt":
+            await self._on_prompt(interaction)
+            return
+        if value in ("lang", "theme", "mode", "model", "temp"):
+            await self._open_choice(interaction, value)
+            return
+        await self._refresh_main(interaction)
+
+    async def _on_prompt(self, interaction: discord.Interaction) -> None:
+        if not await self._guard(interaction):
+            return
+        lang = self._lang()
+        await interaction.response.send_message(tr(lang, "ds_prompt_ask"), ephemeral=True)
+        try:
+            msg = await interaction.client.wait_for(  # type: ignore[union-attr]
+                "message",
+                check=lambda m: m.author.id == self.user_id and m.channel.id == interaction.channel_id,
+                timeout=180,
+            )
+        except Exception:
+            return
+        text = (msg.content or "").strip()
+        cfg = self._write()
+        if text.lower() in ("отмена", "cancel", "сброс", "reset"):
+            cfg["custom_prompt"] = None
+            save_user_configs()
+            await msg.reply(tr(lang, "cfg_prompt_reset"))
+        elif text:
+            cfg["custom_prompt"] = text[:2000]
+            save_user_configs()
+            await msg.reply(tr(lang, "prompt_saved", len(text)))
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+    async def _on_reset_memory(self, interaction: discord.Interaction) -> None:
+        if not await self._guard(interaction):
+            return
+        lang = self._lang()
+        from src.util import long_term_memory, save_long_term_memory
+        long_term_memory.pop(str(self.chat_id), None)
+        try:
+            save_long_term_memory(long_term_memory)
+        except Exception:
+            pass
+        await interaction.response.send_message(tr(lang, "cfg_memory_reset"), ephemeral=True)
+
+    async def _on_reset_prompt(self, interaction: discord.Interaction) -> None:
+        if not await self._guard(interaction):
+            return
+        self._write()["custom_prompt"] = None
+        save_user_configs()
+        await self._refresh_main(interaction)
+
+    async def _on_scope(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(tr(self._lang(), "cfg_not_yours"), ephemeral=True)
+            return
+        if not self.is_admin:
+            await interaction.response.send_message(tr(self._lang(), "ds_only_admins"), ephemeral=True)
+            return
+        new_scope = "self" if self._scope() == "shared" else "shared"
+        set_ds_scope(self.chat_id, new_scope)
+        await self._refresh_main(interaction)
+
+    async def _on_apply(self, interaction: discord.Interaction) -> None:
+        lang = self._lang()
+        save_user_configs()
+        try:
+            await interaction.response.edit_message(embed=ds_config_embed(self.chat_id, self.user_id), view=None)
+        except Exception:
+            pass
+        await interaction.followup.send(tr(lang, "cfg_done"), ephemeral=True)
+
+
+class DsChoiceView(discord.ui.View):
+    """Под-вьюха выбора значения (язык/тема/режим/модель/температура)."""
+
+    def __init__(self, parent: DsConfigView, kind: str) -> None:
+        super().__init__(timeout=600)
+        self.parent = parent
+        self.kind = kind
+        self._build()
+
+    def _build(self) -> None:
+        self.clear_items()
+        p = self.parent
+        cfg = get_effective_config("ds", p.chat_id, p.user_id)
+        lang = p._lang()
+        cur = None
+        options: list[discord.SelectOption] = []
+        if self.kind == "lang":
+            cur = cfg.get("language", "ru")
+            options = [
+                discord.SelectOption(label="Русский 🇷🇺", value="ru", default=cur == "ru"),
+                discord.SelectOption(label="English 🇬🇧", value="en", default=cur == "en"),
+            ]
+            placeholder = tr(lang, "cfg_lang")
+        elif self.kind == "theme":
+            cur = cfg.get("theme", "dark")
+            options = [
+                discord.SelectOption(label=("Тёмная 🌑" if lang == "ru" else "Dark 🌑"), value="dark", default=cur == "dark"),
+                discord.SelectOption(label=("Светлая ☀️" if lang == "ru" else "Light ☀️"), value="light", default=cur == "light"),
+            ]
+            placeholder = tr(lang, "cfg_theme")
+        elif self.kind == "mode":
+            cur = str(cfg.get("communication_mode", "kent"))
+            options = [
+                discord.SelectOption(label=tr(lang, "mode_kent"), value="kent", default=cur == "kent"),
+                discord.SelectOption(label=tr(lang, "mode_assistant"), value="assistant", default=cur == "assistant"),
+            ]
+            if p.is_dm:
+                options.append(discord.SelectOption(label=tr(lang, "mode_pro"), value="pro", default=cur == "pro"))
+            placeholder = tr(lang, "cfg_choose_mode")
+        elif self.kind == "model":
+            cur = cfg.get("model")
+            options = [discord.SelectOption(label=tr(lang, "cfg_auto"), value="auto", default=not cur)]
+            for idx, m in enumerate(MODEL_LIST):
+                options.append(discord.SelectOption(label=MODEL_DISPLAY.get(m, m), value=str(idx), default=cur == m))
+            placeholder = tr(lang, "cfg_choose_model")
+        else:  # temp
+            cur = float(cfg.get("temperature", 0.9))
+            options = [discord.SelectOption(label=str(v), value=str(v), default=abs(cur - v) < 0.01)
+                       for v in [0.2, 0.5, 0.7, 0.9, 1.1, 1.3, 1.5]]
+            placeholder = f"{tr(lang, 'cfg_temp_short')}: {cur}"
+
+        sel = discord.ui.Select(placeholder=placeholder, options=options[:25], row=0)
+        sel.callback = self._on_select
+        self.add_item(sel)
+
+        back = discord.ui.Button(label=tr(lang, "cfg_back"), style=discord.ButtonStyle.primary, row=1)
+        back.callback = self._on_back
+        self.add_item(back)
+
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.parent.user_id:
+            await interaction.response.send_message(tr(self.parent._lang(), "cfg_not_yours"), ephemeral=True)
+            return False
+        return True
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        if not await self._guard(interaction):
+            return
+        p = self.parent
+        val = interaction.data["values"][0]
+        cfg = p._write()
+        if self.kind == "lang":
+            cfg["language"] = val
+        elif self.kind == "theme":
+            cfg["theme"] = val
+        elif self.kind == "mode":
+            if val == "pro" and not p.is_dm:
+                await interaction.response.send_message(tr(p._lang(), "mode_need_dm"), ephemeral=True)
+                return
+            cfg["communication_mode"] = val
+        elif self.kind == "model":
+            if val == "auto":
+                cfg["model"] = None
+            else:
+                try:
+                    cfg["model"] = MODEL_LIST[int(val)]
+                except (ValueError, IndexError):
+                    pass
+        else:  # temp
+            try:
+                cfg["temperature"] = float(val)
+            except ValueError:
+                pass
+        save_user_configs()
+        await p._open_choice(interaction, self.kind)
+
+    async def _on_back(self, interaction: discord.Interaction) -> None:
+        if not await self._guard(interaction):
+            return
+        await self.parent._refresh_main(interaction)
+
+
 async def ds_handle_config(message: discord.Message, user_id: int) -> None:
     chat_id = message.channel.id
     member = as_member(message.author)
+    is_dm = message.guild is None
     is_admin = bool(member and member.guild_permissions.administrator) if message.guild else True
-    scope = get_ds_scope(chat_id)
-    if scope == "shared" and not is_admin:
-        # не админ в shared-режиме — показываем только его личные (self) значения
-        embed = ds_config_embed(chat_id, user_id)
-        await message.reply(embed=embed)
-        return
     embed = ds_config_embed(chat_id, user_id)
-    await message.reply(embed=embed)
+    view = DsConfigView(chat_id, user_id, is_admin, is_dm=is_dm)
+    await message.reply(embed=embed, view=view)
 
 
 async def ds_handle_config_param(message: discord.Message, user_id: int, parts: list[str]) -> None:
@@ -636,14 +1106,55 @@ def ds_lang_of(interaction: discord.Interaction) -> str:
     return lang if isinstance(lang, str) else "ru"
 
 
+class DsMenuView(discord.ui.View):
+    """Меню как в TG: настройки, команды, донат, GitHub, MINI APP-ссылка."""
+
+    def __init__(self, lang: str) -> None:
+        super().__init__(timeout=600)
+        self.lang = lang
+
+        b_settings = discord.ui.Button(label=tr(lang, "btn_settings"),
+                                       style=discord.ButtonStyle.success, row=0)
+        b_settings.callback = self._on_settings
+        self.add_item(b_settings)
+
+        b_cmds = discord.ui.Button(label=tr(lang, "btn_commands"),
+                                   style=discord.ButtonStyle.primary, row=0)
+        b_cmds.callback = self._on_help
+        self.add_item(b_cmds)
+
+        self.add_item(discord.ui.Button(label=tr(lang, "btn_donate"),
+                                        style=discord.ButtonStyle.link, url=DONATE_URL, row=1))
+        self.add_item(discord.ui.Button(label=tr(lang, "btn_github"),
+                                        style=discord.ButtonStyle.link, url=GITHUB_URL, row=1))
+        self.add_item(discord.ui.Button(label="🚀 Mini App",
+                                        style=discord.ButtonStyle.link, url=MINI_APP_URL, row=2))
+
+    async def _on_settings(self, interaction: discord.Interaction) -> None:
+        chat_id = interaction.channel_id or 0
+        user_id = interaction.user.id
+        is_admin = True
+        member = as_member(interaction.user)
+        if interaction.guild:
+            is_admin = bool(member and member.guild_permissions.administrator)
+        view = DsConfigView(chat_id, user_id, is_admin, is_dm=interaction.guild is None)
+        embed = ds_config_embed(chat_id, user_id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def _on_help(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(ds_help_text(self.lang), ephemeral=True)
+
+
 async def ds_slash_start(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
-    await interaction.response.send_message(ds_start_text(lang))
+    view = DsMenuView(lang)
+    await interaction.response.send_message(ds_start_text(lang), view=view)
 
 
 async def ds_slash_menu(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
-    await interaction.response.send_message(ds_menu_text(lang))
+    view = DsMenuView(lang)
+    await interaction.response.send_message(ds_menu_text(lang), view=view)
 
 
 async def ds_slash_help(interaction: discord.Interaction) -> None:
@@ -715,13 +1226,14 @@ async def ds_slash_config(interaction: discord.Interaction, scope: str | None = 
         return
 
     cur_scope = get_ds_scope(chat_id)
-    if cur_scope == "shared" and not is_admin:
-        # не админ — показываем только его собственные настройки (он их видит, но не может менять)
-        embed = ds_config_embed(chat_id, user_id)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+    is_dm = interaction.guild is None
+    view = DsConfigView(chat_id, user_id, is_admin, is_dm=is_dm)
     embed = ds_config_embed(chat_id, user_id)
-    await interaction.response.send_message(embed=embed, ephemeral=not is_admin)
+    if cur_scope == "shared" and not is_admin:
+        # не админ — видит настройки, но кнопки неактивны
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        return
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=not is_admin)
 
 
 @app_commands.describe(user="Whose avatar to describe / Чью аватарку описать")

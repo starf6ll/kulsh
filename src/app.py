@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.4
+# Kulsh GPT | v2.46.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -218,13 +218,21 @@ async def main() -> None:
         logger.info(f"Discord {ds_bot.user} запущен, discord.py {discord.__version__}")
         if not voice_recognition_enabled:
             logger.info("ℹ️ Распознавание голоса отключено")
+        # Глобальная синхронизация — команды видны во ВСЕХ серверах, где есть бот.
         try:
-            guild = discord.Object(id=DS_ALLOWED_GUILD_ID)
-            ds_tree.copy_global_to(guild=guild)
-            synced = await ds_tree.sync(guild=guild)
-            logger.info(f"Синхронизировано slash-команд: {len(synced)}")
+            synced = await ds_tree.sync()
+            logger.info(f"Синхронизировано slash-команд (глобально): {len(synced)}")
         except Exception as e:
-            logger.error(f"Не удалось синхронизировать slash-команды: {e}")
+            logger.error(f"Не удалось синхронизировать slash-команды (global): {e}")
+        # Мгновенная синхронизация в основной гильдии (global-схема расходится до ~1 часа).
+        if DS_ALLOWED_GUILD_ID:
+            try:
+                guild = discord.Object(id=DS_ALLOWED_GUILD_ID)
+                ds_tree.copy_global_to(guild=guild)
+                synced_g = await ds_tree.sync(guild=guild)
+                logger.info(f"Синхронизировано slash-команд (guild {DS_ALLOWED_GUILD_ID}): {len(synced_g)}")
+            except Exception as e:
+                logger.error(f"Не удалось синхронизировать slash-команды (guild): {e}")
         _series_loop = getattr(loops, "series_reminder_loop", None)
         if callable(_series_loop):
             asyncio.create_task(loops.series_reminder_loop())

@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.45.0
+# Kulsh GPT | v2.46.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -25,6 +25,7 @@ from src.ai import (
     user_wants_chart,
 )
 from src.charts import extract_chart_marker, render_infographic
+from src.draw import process_drawing
 from src.looks import (
     create_femboy_battle_infographic,
     create_femboy_infographic,
@@ -1214,6 +1215,23 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
             if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
 
+    # ---- draw / term ----
+    if "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
+        try:
+            draw_png, answer_raw, term_status = await process_drawing(answer_raw or "")
+            if term_status:
+                logger.info(f"🎨 draw terminal: {term_status}")
+            if draw_png is not None:
+                try:
+                    await tg_bot.send_photo(
+                        chat_id, InputFile(draw_png, file_name="drawing.png"),
+                        reply_to_message_id=message.message_id,
+                    )
+                except Exception as e:
+                    logger.error(f"tg draw send: {e}")
+        except Exception as e:
+            logger.error(f"tg draw: {e}")
+
     # Разбиение на сегменты
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
@@ -1231,6 +1249,10 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
 
     all_segments = clean_segments + extra_segments
 
+    if not all_segments:
+        fallback = scrub_stray_markers(answer_raw or "").strip()
+        if fallback and not markers:
+            all_segments = [fallback]
     if not all_segments:
         for m in markers:
             try:

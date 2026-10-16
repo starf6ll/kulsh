@@ -30,11 +30,13 @@ Now also a brutally honest **looksmaxxing analyst** – upload a face photo and 
 - **Message Splitting** – When enabled, the bot naturally breaks replies into multiple short messages (via `!separate` marker, with a fallback that also honours blank-line and sentence boundaries) for a live, human texting feel. The model is explicitly forbidden from using `Enter` / `Shift+Enter` as a separator.
 - **Emoji Reactions** – The bot can react to the user's message with an emoji instead of (or in addition to) a text reply, on **both** platforms.
 - **Emoji Discipline** – In `kent` mode the bot keeps emojis to an absolute minimum and the output is post-filtered (only 🍷🗿 survive).
-- **Remote Administration** – Built-in logging system that allows owners to retrieve `bot.log` files and live stdout directly via chat commands.
+- **Remote Administration** – Built-in logging system that allows owners to retrieve `bot.log` files and live stdout directly via chat commands (works in servers **and** DMs).
 - **Automated Engagement** – Periodic auto-posting of "random thoughts" to keep the chat alive.
 - **Donation System** – Support via Telegram Stars and DonationAlerts integration with a cross-platform leaderboard.
 - **Credits System** – Daily per-user credits that gate the heavier tools (archive editing).
 - **🔄 Auto-Update** – Authorized users can trigger a `git pull` and automatic restart directly from Discord (`кульш обновись`), with automatic rollback if a new commit fails the smoke check. Requires systemd setup.
+- **🆕 Interactive Discord UI** – The full settings panel is built from native Discord components: one navigator select plus buttons for toggles, and sub-menus with select menus for language, theme, mode, model and temperature — mirroring the Telegram UX. Slash commands are synced **globally**, so the `/` command list is populated in every server the bot is in.
+- **🆕 Drawing Engine (Pillow)** – Kulsh can draw arbitrary images **on his own**, without any special command: if the latest user message asks for a picture, he emits a `!draw` JSON spec that the bot renders with Pillow (shapes, lines, polygons, bezier/SVG paths, gradients, text with custom fonts, shadows, blurs, image overlays). A restricted `!term` terminal lets him fetch fonts/overlay images (from an allow-list of hosts) and `pip install` a whitelisted set of rendering packages; temporary assets are sandboxed and deleted right after the finished image is sent.
 - **🆕 Looksmaxxing Analysis** – Strict facial aesthetics evaluation.
   Upload a photo (in Discord or Telegram) with the `кульш psl` command and receive:
   - Objective **PSL rating** (1.0–8.0) and exact **tier** (Sub3 to True Adam / True Eve) with tier distribution chart
@@ -282,6 +284,10 @@ The bot's own responses can contain invisible utility markers that the bot strip
 | `!sticker` / `!gif` | Send a sticker / GIF. |
 | `!group_info` / `!user_info[:id]` | Fetch group / user info. |
 | `!chart` + JSON block | Render an infographic (premium). |
+| `!draw` + JSON block | Draw an arbitrary image with Pillow (shapes, SVG paths, gradients, text, shadows, overlays). |
+| `!term <command>` | Restricted asset terminal: download fonts/images (host allow-list) or `pip install` a whitelisted rendering package. |
+
+**Autonomous drawing:** drawing is *not* a user command. If the latest message asks for a picture ("нарисуй", "изобрази", "draw", …), Kulsh decides on his own to answer with a `!draw` spec, which the bot renders and sends. The `!draw` spec supports: `gradient` / `radial_gradient`, `line`, `rect`, `circle`/`ellipse`, `polygon`, `svg` (M/L/H/V/C/S/Q/T/Z paths), `text` (custom font), `image` (overlay from `!term`), `blur`, and a `shadow` object on any element.
 
 **Reactions now work reliably:** the parser accepts `!react:👍`, `!react: 👍`, `[реакция 😂]`, `(реакция: 🗿)` and similar variants, applies the correct emoji via the platform API, and strips any stray marker so it never leaks into the chat as raw text.
 

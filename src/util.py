@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.45.0"
+BOT_VERSION: str = "2.46.0"
 
 MSK = timezone(timedelta(hours=3))
 
@@ -815,6 +815,11 @@ UTILITY_PATTERNS = {
     "group_info": re.compile(r'!\s*group[\s_]*info(?![A-Za-z])', re.IGNORECASE),
     "user_info": re.compile(r'!\s*user[\s_]*info(?::\s*(\d+))?(?![A-Za-z])', re.IGNORECASE),
 }
+# Хвостовые маркеры, которые не должны попадать в чат (обрабатываются отдельно или вырезаются).
+STRAY_EXTRA_PATTERNS = (
+    re.compile(r'!\s*draw\b', re.IGNORECASE),
+    re.compile(r'!\s*term\b[^\n]*', re.IGNORECASE),
+)
 SEPARATOR_PATTERN = re.compile(
     r'!+\s*sep[ae]rate(?![A-Za-z])',
     re.IGNORECASE,
@@ -957,6 +962,7 @@ def scrub_stray_markers(text: str) -> str:
         CHART_MARKER_PATTERN,
         RECALL_MEDIA_ID_PATTERN,
         *UTILITY_PATTERNS.values(),
+        *STRAY_EXTRA_PATTERNS,
     ]
     for pat in pats:
         text = pat.sub(' ', text)
