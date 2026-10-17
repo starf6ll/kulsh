@@ -435,6 +435,10 @@ def _to_openai_messages(
 # в первое пользовательское сообщение.
 EMBED_SYSTEM_MODELS = frozenset({"gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"})
 
+# Служебная модель для памяти: дешёвая и всегда бесплатная, чтобы извлечение
+# фактов не зависело от выбранной пользователем платной модели.
+MEMORY_MODEL = "glm-5.3-flash"
+
 
 async def _ask_openai_chat(
     provider: str,
@@ -792,21 +796,35 @@ async def extract_memory(chat_id: str, user_message: str, bot_answer: str,
         f"Если нет — пустой массив. Только JSON.\n"
         f"Пользователь: {user_message}\nБот: {bot_answer}"
     )
+    # Служебные ответы (ошибки, уведомление о балансе) не несут фактов о человеке.
+    if not bot_answer or bot_answer.startswith(NO_SPLIT_MARKER):
+        return
     system_instruction = "Ты ассистент извлечения долговременной памяти. Отвечай только JSON массивом строк."
-    # Служебная задача классификации: не перебираем весь список моделей и не шумим
-    # в логах выбором провайдера — берём выбранную модель пользователя (или первую доступную).
-    model_hint = None
-    if source_chat_id:
-        model_hint = get_effective_config(platform, source_chat_id, user_id).get("model")
+    # Служебная задача: всегда дешёвая бесплатная модель, никогда не выбор пользователя.
+    # Иначе после платного ответа (баланс уже списан) память уходила в fallback-модель
+    # и тратила лишний запрос.
+    del source_chat_id
     try:
         raw = await ask_ai_async(
             prompt=prompt,
             system_instruction_override=system_instruction,
             messages=None,
-            model_override=model_hint,
+            model_override=MEMORY_MODEL,
             no_fallback=True,
         )
-        facts = json.loads(clean_json_text(raw))
+    except Exception as e:
+        logger.warning(f"extract_memory: запрос не удался: {e}")
+        return
+    text = clean_json_text(raw or "")
+    if not text or text[0] not in "[{":
+        logger.debug(f"extract_memory: не JSON, пропускаю: {text[:80]!r}")
+        return
+    try:
+        facts = json.loads(text)
+    except (ValueError, TypeError) as e:
+        logger.warning(f"extract_memory: битый JSON ({e}): {text[:80]!r}")
+        return
+    try:
         if isinstance(facts, list) and facts:
             facts_list = cast(list[object], facts)
             if chat_id not in long_term_memory:
