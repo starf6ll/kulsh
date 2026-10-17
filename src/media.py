@@ -531,9 +531,17 @@ async def handle_tg_text(message: types.Message) -> None:
             return
 
     if user_id in balance_ui.SUPPORT_WAITING:
+        waiting = balance_ui.SUPPORT_WAITING.get(user_id) or {}
         if text.strip().lower() in ("/cancel", "отмена", "cancel", "/отмена"):
             balance_ui.SUPPORT_WAITING.pop(user_id, None)
-            await _tg().reply_tg_html(message, balance_ui.t(lang, "support_cancel"))
+            ask_id = waiting.get("ask_id") if isinstance(waiting, dict) else None
+            for mid in (ask_id, message.message_id):
+                if not mid:
+                    continue
+                try:
+                    await _tg().tg_bot.delete_message(chat_id, mid)
+                except Exception:
+                    pass
             return
         await balance_ui.submit_support_tg(_tg().tg_bot, user_id, chat_id, text.strip(), lang)
         return
@@ -542,11 +550,11 @@ async def handle_tg_text(message: types.Message) -> None:
         waiting_msg_id = prompt_waiting.pop(user_id, None)
         new_prompt = text.strip()
         if new_prompt.lower() in ("отмена", "cancel", "/cancel", "отменить"):
-            cfg["custom_prompt"] = None
-            save_user_configs()
-            if waiting_msg_id:
+            for mid in (waiting_msg_id, message.message_id):
+                if not mid:
+                    continue
                 try:
-                    await _tg().tg_bot.edit_message_text(tr(lang, "prompt_cancelled"), chat_id, waiting_msg_id)
+                    await _tg().tg_bot.delete_message(chat_id, mid)
                 except Exception:
                     pass
         else:

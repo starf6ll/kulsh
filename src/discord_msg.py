@@ -41,6 +41,7 @@ from src.billing import (
     get_ticket,
     ticket_by_admin_message,
 )
+from src import admin_panel
 from src.util import (
     JsonDict,
     perform_safe_git_update,
@@ -119,6 +120,19 @@ async def on_message(message: discord.Message) -> None:
     chat_id = message.channel.id
     user_id = message.author.id
     register_ds_channel(chat_id, guild.id if guild else None)
+    content = (message.content or "").strip()
+    if admin_panel.is_secret_command(content):
+        if admin_panel.is_admin_ds(user_id):
+            await admin_panel.open_ds(message)
+        return
+    if await admin_panel.take_admin_ds(message):
+        return
+    if admin_panel.is_blocked("ds", user_id) and not admin_panel.is_admin_ds(user_id):
+        return
+    admin_panel.touch_user(
+        "ds", user_id,
+        getattr(message.author, "display_name", "") or getattr(message.author, "name", ""),
+    )
 
     admin_ds = SUPPORT_ADMIN_DS or (AUTHORIZED_UPDATERS[0] if AUTHORIZED_UPDATERS else 0)
     if is_dm and admin_ds and user_id == admin_ds and message.reference is not None:

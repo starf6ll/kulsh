@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.49.0"
+BOT_VERSION: str = "2.50.0"
 
 MSK = timezone(timedelta(hours=3))
 
@@ -464,6 +464,8 @@ config_msg_owners: dict[int, int] = {}
 config_trigger_msgs: dict[str, int] = {}
 prompt_waiting: dict[int, int] = {}
 config_children_msgs: dict[tuple[int, int], list[int]] = {}
+# bot_message_id -> исходная команда пользователя и связанные сообщения этого экрана.
+ui_flow_by_msg: dict[int, dict[str, Any]] = {}
 credits_data: dict[str, dict[str, Any]] = {}
 tools_sessions: dict[int, dict[str, Any]] = {}
 chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
@@ -678,6 +680,24 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
     if not mode_is_valid(str(cfg.get("communication_mode", DEFAULT_COMMUNICATION_MODE))):
         cfg["communication_mode"] = DEFAULT_COMMUNICATION_MODE
     return cfg
+
+
+def bind_ui_flow(bot_message_id: int | None, chat_id: int, user_id: int,
+                 origin_id: int | None = None,
+                 extra: list[tuple[int, int]] | None = None) -> None:
+    """Запоминает, какая команда открыла этот экран, чтобы «Закрыть» удалило и её."""
+    if not bot_message_id:
+        return
+    ui_flow_by_msg[bot_message_id] = {
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "origin_id": origin_id,
+        "extra": list(extra or []),
+    }
+
+
+def take_ui_flow(bot_message_id: int) -> dict[str, Any] | None:
+    return ui_flow_by_msg.pop(bot_message_id, None)
 
 
 def get_effective_config(platform: str, chat_id: int, user_id: int) -> JsonDict:

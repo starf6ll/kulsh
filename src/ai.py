@@ -528,6 +528,30 @@ def _bill_model(platform: str, chat_id: int | None, user_id: int | None,
         logger.warning(f"💳 не хватило баланса на {cost:.4f} ₽ ({model_name})")
 
 
+def _usage_tokens(usage: JsonDict | None, answer: str) -> int:
+    if usage:
+        total = usage.get("total_tokens")
+        if isinstance(total, (int, float)):
+            return int(total)
+        prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        if prompt or completion:
+            return prompt + completion
+    return max(1, len(answer) // 4)
+
+
+def _note_request(platform: str, user_id: int | None, model_name: str,
+                  usage: JsonDict | None, answer: str, context_type: str | None,
+                  no_fallback: bool) -> None:
+    if not user_id or no_fallback or context_type not in (None, "default"):
+        return
+    try:
+        from src.admin_panel import log_request
+        log_request(platform, user_id, model_name, _usage_tokens(usage, answer))
+    except Exception:
+        pass
+
+
 async def ask_ai_async(
     prompt: str | None = None,
     context_type: str | None = "default",
@@ -678,6 +702,7 @@ async def ask_ai_async(
             )
             if answer:
                 _bill_model(platform, chat_id, user_id, model_name, usage)
+                _note_request(platform, user_id, model_name, usage, answer, context_type, no_fallback)
                 return answer
         if model_name in NEUTRALBEATS_MODELS:
             answer, usage = await _ask_openai_chat(
@@ -686,6 +711,7 @@ async def ask_ai_async(
             )
             if answer:
                 _bill_model(platform, chat_id, user_id, model_name, usage)
+                _note_request(platform, user_id, model_name, usage, answer, context_type, no_fallback)
                 return answer
         if model_name not in gemini_models:
             continue
@@ -735,7 +761,9 @@ async def ask_ai_async(
                                 ]
                                 if texts:
                                     logger.info("   ✓ 200 OK — ответ получен")
-                                    return "".join(texts)
+                                    joined = "".join(texts)
+                                    _note_request(platform, user_id, model_name, None, joined, context_type, no_fallback)
+                                    return joined
                             except (KeyError, IndexError, TypeError):
                                 continue
                         else:

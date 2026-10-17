@@ -17,6 +17,7 @@ from telebot import util as util
 from telebot.types import ForceReply, InlineKeyboardMarkup, InputFile
 
 from src import balance_ui
+from src import admin_panel
 from src.loops import send_donation_alert
 from src.ai import (
     extract_search_marker,
@@ -94,6 +95,9 @@ from src.util import (
     config_children_msgs,
     config_msg_owners,
     config_trigger_msgs,
+    bind_ui_flow,
+    take_ui_flow,
+    ui_flow_by_msg,
     get_chat_key,
     get_chat_memory,
     get_user_config,
@@ -251,6 +255,45 @@ async def edit_or_send(call: types.CallbackQuery, text: str, kb: InlineKeyboardM
     await _edit_config_message(msg.chat.id, msg.message_id, text, kb)
 
 
+async def dismiss_ui_flow(chat_id: int, user_id: int, bot_message_id: int, *, keep_bot: bool = False) -> None:
+    """Удаляет экран, команду, которая его открыла, и всё, что к нему приложилось."""
+    rec = take_ui_flow(bot_message_id) or {}
+    origin = rec.get("origin_id")
+    extras = rec.get("extra") if isinstance(rec.get("extra"), list) else []
+    trig = config_trigger_msgs.pop(get_chat_key("tg", chat_id), None)
+    await cleanup_config_children(chat_id, user_id)
+    targets: list[tuple[int, int]] = []
+    if isinstance(origin, int):
+        targets.append((chat_id, origin))
+    if isinstance(trig, int) and isinstance(origin, int) and trig != origin:
+        targets.append((chat_id, trig))
+    for item in extras:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            targets.append((int(item[0]), int(item[1])))
+    if not keep_bot:
+        targets.append((chat_id, bot_message_id))
+    seen: set[tuple[int, int]] = set()
+    for cid, mid in targets:
+        if not mid or (cid, mid) in seen:
+            continue
+        seen.add((cid, mid))
+        try:
+            await tg_bot.delete_message(cid, mid)
+        except Exception:
+            pass
+
+
+def _move_ui_flow(old_id: int, new_id: int | None) -> None:
+    rec = take_ui_flow(old_id)
+    if not rec or not new_id:
+        return
+    bind_ui_flow(
+        new_id, int(rec.get("chat_id") or 0), int(rec.get("user_id") or 0),
+        origin_id=rec.get("origin_id") if isinstance(rec.get("origin_id"), int) else None,
+        extra=rec.get("extra") if isinstance(rec.get("extra"), list) else None,
+    )
+
+
 # ============================================================
 # CALLBACK HANDLER (cfg:)
 # ============================================================
@@ -393,14 +436,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
 
     if action == "apply":
         config_msg_owners.pop(msg.message_id, None)
-        chat_key = get_chat_key("tg", chat_id)
-        trig_id = config_trigger_msgs.pop(chat_key, None)
-        if trig_id:
-            try:
-                await tg_bot.delete_message(chat_id, trig_id)
-            except Exception:
-                pass
-        await cleanup_config_children(chat_id, user_id)
+        await dismiss_ui_flow(chat_id, user_id, msg.message_id, keep_bot=True)
         save_user_configs()
         await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_done"))
         asyncio.create_task(play_apply_animation(chat_id, msg.message_id))
@@ -482,18 +518,24 @@ async def handle_menu_callback(call: types.CallbackQuery) -> None:
         nick = call.from_user.full_name or call.from_user.username or str(user_id)
         if action == "balance":
             await tg_bot.answer_callback_query(cb_id(call))
+            origin = (ui_flow_by_msg.get(msg.message_id) or {}).get("origin_id")
             if is_private and await balance_ui.edit_screen_tg(
                 tg_bot, chat_id, msg.message_id, "balance", lang, user_id, nick,
             ):
                 return
-            await balance_ui.send_balance_menu_tg(tg_bot, chat_id, user_id, lang, nick)
+            await balance_ui.send_balance_menu_tg(
+                tg_bot, chat_id, user_id, lang, nick, origin_id=origin if isinstance(origin, int) else None,
+            )
         elif action == "profile":
             await tg_bot.answer_callback_query(cb_id(call))
+            origin = (ui_flow_by_msg.get(msg.message_id) or {}).get("origin_id")
             if is_private and await balance_ui.edit_screen_tg(
                 tg_bot, chat_id, msg.message_id, "profile", lang, user_id, nick,
             ):
                 return
-            await balance_ui.send_profile_tg(tg_bot, chat_id, user_id, lang, nick)
+            await balance_ui.send_profile_tg(
+                tg_bot, chat_id, user_id, lang, nick, origin_id=origin if isinstance(origin, int) else None,
+            )
         elif action == "checkpay":
             await tg_bot.answer_callback_query(cb_id(call), tr(lang, "checking"))
             await balance_ui.check_payment_tg(tg_bot, chat_id, user_id, lang)
@@ -503,11 +545,7 @@ async def handle_menu_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "close":
-        try:
-            await tg_bot.delete_message(chat_id, msg.message_id)
-        except Exception:
-            pass
-        await cleanup_config_children(chat_id, user_id)
+        await dismiss_ui_flow(chat_id, user_id, msg.message_id)
         await tg_bot.answer_callback_query(cb_id(call))
         return
 
@@ -529,7 +567,8 @@ async def handle_menu_callback(call: types.CallbackQuery) -> None:
                 await tg_bot.delete_message(chat_id, msg.message_id)
             except Exception:
                 pass
-            await send_formatted(chat_id, help_text)
+            new_id = await send_formatted_returning_id(chat_id, help_text)
+            _move_ui_flow(msg.message_id, new_id)
         return
 
     if action == "open":
@@ -542,7 +581,8 @@ async def handle_menu_callback(call: types.CallbackQuery) -> None:
                 await tg_bot.delete_message(chat_id, msg.message_id)
             except Exception:
                 pass
-            await send_formatted(chat_id, menu_text, reply_markup=kb)
+            new_id = await send_formatted_returning_id(chat_id, menu_text, reply_markup=kb)
+            _move_ui_flow(msg.message_id, new_id)
         return
 
 
@@ -578,11 +618,17 @@ async def handle_start(message: types.Message) -> None:
     is_private = (message.chat.type == 'private')
     if args in ("balance", "profile") and is_private:
         nick = message.from_user.full_name or message.from_user.username or str(user_id)
-        await balance_ui.send_screen_tg(tg_bot, chat_id, user_id, lang, nick, screen=args)
+        await balance_ui.send_screen_tg(
+            tg_bot, chat_id, user_id, lang, nick, screen=args,
+            reply_to=message.message_id, origin_id=message.message_id,
+        )
         return
     start_text = build_start_text(lang)
     kb = build_start_keyboard(lang, is_private=is_private)
-    await send_formatted(chat_id, start_text, reply_to=message.message_id, reply_markup=kb)
+    mid = await send_formatted_returning_id(
+        chat_id, start_text, reply_to=message.message_id, reply_markup=kb,
+    )
+    bind_ui_flow(mid, chat_id, user_id, origin_id=message.message_id)
 
 
 async def handle_menu(message: types.Message) -> None:
@@ -595,7 +641,10 @@ async def handle_menu(message: types.Message) -> None:
     is_private = (message.chat.type == 'private')
     menu_text = build_menu_text(lang)
     kb = build_menu_keyboard(lang, is_private=is_private)
-    await send_formatted(chat_id, menu_text, reply_to=message.message_id, reply_markup=kb)
+    mid = await send_formatted_returning_id(
+        chat_id, menu_text, reply_to=message.message_id, reply_markup=kb,
+    )
+    bind_ui_flow(mid, chat_id, user_id, origin_id=message.message_id)
 
 
 async def handle_help(message: types.Message) -> None:
@@ -682,6 +731,7 @@ async def handle_balance(message: types.Message) -> None:
     await balance_ui.send_balance_menu_tg(
         tg_bot, message.chat.id, message.from_user.id, lang, nick,
         reply_to=message.message_id,
+        origin_id=message.message_id,
     )
 
 
@@ -694,6 +744,7 @@ async def handle_profile(message: types.Message) -> None:
     await balance_ui.send_profile_tg(
         tg_bot, message.chat.id, message.from_user.id, lang, nick,
         reply_to=message.message_id,
+        origin_id=message.message_id,
     )
 
 
@@ -754,6 +805,22 @@ async def handle_toggle_premium(message: types.Message) -> None:
     await reply_tg_html(message, f"Расширенные функции: {label}")
 
 
+async def handle_admin_secret(message: types.Message) -> None:
+    if message.from_user is None or not admin_panel.is_admin_tg(message.from_user.id):
+        return
+    await admin_panel.open_tg(tg_bot, message.chat.id, message.from_user.id, message.message_id)
+
+
+async def handle_admin_callback(call: types.CallbackQuery) -> None:
+    if not admin_panel.is_admin_tg(call.from_user.id):
+        try:
+            await tg_bot.answer_callback_query(cb_id(call))
+        except Exception:
+            pass
+        return
+    await admin_panel.on_tg_callback(tg_bot, call)
+
+
 async def handle_pre_checkout(pre_checkout: types.PreCheckoutQuery) -> None:
     await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
 
@@ -793,6 +860,7 @@ async def tg_handle_config(message: types.Message) -> None:
     )
     if mid is not None:
         config_msg_owners[mid] = user_id
+        bind_ui_flow(mid, chat_id, user_id, origin_id=message.message_id)
     else:
         # fallback plain
         try:
@@ -800,7 +868,9 @@ async def tg_handle_config(message: types.Message) -> None:
                 chat_id, re.sub(r'<[^>]+>', '', markdown_like_to_telegram_html(cfg_text)),
                 reply_markup=kb, reply_to_message_id=message.message_id,
             )
-            config_msg_owners[getattr(msg, "message_id", 0)] = user_id
+            fallback_id = getattr(msg, "message_id", 0)
+            config_msg_owners[fallback_id] = user_id
+            bind_ui_flow(fallback_id, chat_id, user_id, origin_id=message.message_id)
         except Exception as e:
             logger.error(f"Config fallback fail: {e}")
 

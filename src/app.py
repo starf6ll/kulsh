@@ -14,6 +14,7 @@ from telebot import types as types
 from telebot.async_telebot import AsyncTeleBot
 
 from src import discord_cmds, discord_msg, loops, media, rich, telegram, billing
+from src import admin_panel
 from src.util import (
     AI_KEYS,
     NEUTRALBEATS_API_KEY,
@@ -44,6 +45,23 @@ intents.guilds = True
 ds_bot = discord.Client(intents=intents)
 ds_tree = app_commands.CommandTree(ds_bot)
 
+
+async def _ds_interaction_check(interaction: discord.Interaction) -> bool:
+    if admin_panel.is_blocked("ds", interaction.user.id) and not admin_panel.is_admin_ds(interaction.user.id):
+        try:
+            await interaction.response.send_message("Доступ ограничен.", ephemeral=True)
+        except Exception:
+            pass
+        return False
+    admin_panel.touch_user(
+        "ds", interaction.user.id,
+        getattr(interaction.user, "display_name", "") or interaction.user.name,
+    )
+    return True
+
+
+ds_tree.interaction_check = _ds_interaction_check  # type: ignore[method-assign]
+
 telegram.bind(tg_bot)
 rich.bind(tg_bot)
 discord_cmds.bind(ds_bot)
@@ -66,23 +84,49 @@ def _message_has_text(message: types.Message) -> bool:
 
 def register_telegram() -> None:
     deco = typed_decorator
-    deco(getattr(tg_bot, "callback_query_handler"))(func=_callback_startswith("cfg:"))(telegram.handle_cfg_callback)
-    deco(getattr(tg_bot, "callback_query_handler"))(func=_callback_startswith("menu:"))(telegram.handle_menu_callback)
-    deco(getattr(tg_bot, "message_handler"))(commands=["start"])(telegram.handle_start)
-    deco(getattr(tg_bot, "message_handler"))(commands=["menu"])(telegram.handle_menu)
-    deco(getattr(tg_bot, "message_handler"))(commands=["help"])(telegram.handle_help)
-    deco(getattr(tg_bot, "message_handler"))(commands=["status"])(telegram.handle_status)
-    deco(getattr(tg_bot, "message_handler"))(commands=["donate"])(telegram.handle_donate)
-    deco(getattr(tg_bot, "message_handler"))(commands=["donate_stars"])(telegram.handle_donate_stars)
-    deco(getattr(tg_bot, "message_handler"))(commands=["credits"])(telegram.handle_credits)
-    deco(getattr(tg_bot, "message_handler"))(commands=["balance"])(telegram.handle_balance)
-    deco(getattr(tg_bot, "message_handler"))(commands=["profile"])(telegram.handle_profile)
-    deco(getattr(tg_bot, "message_handler"))(commands=["support"])(telegram.handle_support)
-    deco(getattr(tg_bot, "message_handler"))(commands=["togglepremiumfunctionsadmin"])(telegram.handle_toggle_premium)
+    def _guard_msg(fn: Callable[..., Any]) -> Callable[..., Any]:
+        async def wrapped(message: types.Message, *args: Any, **kwargs: Any) -> Any:
+            if await admin_panel.take_admin_input(tg_bot, message):
+                return None
+            user = getattr(message, "from_user", None)
+            if user and admin_panel.is_blocked("tg", user.id) and not admin_panel.is_admin_tg(user.id):
+                return None
+            if user and not getattr(user, "is_bot", False):
+                admin_panel.touch_user("tg", user.id, getattr(user, "full_name", "") or "")
+            return await fn(message, *args, **kwargs)
+        return wrapped
+
+    def _guard_call(fn: Callable[..., Any]) -> Callable[..., Any]:
+        async def wrapped(call: types.CallbackQuery, *args: Any, **kwargs: Any) -> Any:
+            user = call.from_user
+            if admin_panel.is_blocked("tg", user.id) and not admin_panel.is_admin_tg(user.id):
+                try:
+                    await tg_bot.answer_callback_query(call.id)
+                except Exception:
+                    pass
+                return None
+            return await fn(call, *args, **kwargs)
+        return wrapped
+
+    deco(getattr(tg_bot, "callback_query_handler"))(func=_callback_startswith("cfg:"))(_guard_call(telegram.handle_cfg_callback))
+    deco(getattr(tg_bot, "callback_query_handler"))(func=_callback_startswith("menu:"))(_guard_call(telegram.handle_menu_callback))
+    deco(getattr(tg_bot, "callback_query_handler"))(func=_callback_startswith("adm:"))(telegram.handle_admin_callback)
+    deco(getattr(tg_bot, "message_handler"))(commands=["start"])(_guard_msg(telegram.handle_start))
+    deco(getattr(tg_bot, "message_handler"))(commands=["menu"])(_guard_msg(telegram.handle_menu))
+    deco(getattr(tg_bot, "message_handler"))(commands=["help"])(_guard_msg(telegram.handle_help))
+    deco(getattr(tg_bot, "message_handler"))(commands=["status"])(_guard_msg(telegram.handle_status))
+    deco(getattr(tg_bot, "message_handler"))(commands=["donate"])(_guard_msg(telegram.handle_donate))
+    deco(getattr(tg_bot, "message_handler"))(commands=["donate_stars"])(_guard_msg(telegram.handle_donate_stars))
+    deco(getattr(tg_bot, "message_handler"))(commands=["credits"])(_guard_msg(telegram.handle_credits))
+    deco(getattr(tg_bot, "message_handler"))(commands=["balance"])(_guard_msg(telegram.handle_balance))
+    deco(getattr(tg_bot, "message_handler"))(commands=["profile"])(_guard_msg(telegram.handle_profile))
+    deco(getattr(tg_bot, "message_handler"))(commands=["support"])(_guard_msg(telegram.handle_support))
+    deco(getattr(tg_bot, "message_handler"))(commands=["adminpanel12345"])(_guard_msg(telegram.handle_admin_secret))
+    deco(getattr(tg_bot, "message_handler"))(commands=["togglepremiumfunctionsadmin"])(_guard_msg(telegram.handle_toggle_premium))
     deco(getattr(tg_bot, "pre_checkout_query_handler"))(func=_always_true)(telegram.handle_pre_checkout)
     deco(getattr(tg_bot, "message_handler"))(content_types=["successful_payment"])(telegram.handle_successful_payment)
-    deco(getattr(tg_bot, "message_handler"))(content_types=["photo", "video", "animation", "document", "sticker"])(media.handle_tg_media)
-    deco(getattr(tg_bot, "message_handler"))(func=_message_has_text, content_types=["text"])(media.handle_tg_text)
+    deco(getattr(tg_bot, "message_handler"))(content_types=["photo", "video", "animation", "document", "sticker"])(_guard_msg(media.handle_tg_media))
+    deco(getattr(tg_bot, "message_handler"))(func=_message_has_text, content_types=["text"])(_guard_msg(media.handle_tg_text))
 
 
 def register_discord() -> None:
@@ -262,26 +306,26 @@ async def main() -> None:
 
     async def start_telegram() -> None:
         ru_commands = [
-            types.BotCommand("start", "🚀 Запустить Кульша"),
-            types.BotCommand("menu", "📖 Открыть меню"),
-            types.BotCommand("balance", "💳 Баланс и пополнение"),
-            types.BotCommand("profile", "👤 Профиль и статистика"),
-            types.BotCommand("support", "💬 Написать в поддержку"),
-            types.BotCommand("help", "📚 Список всех команд"),
-            types.BotCommand("status", "🟢 Состояние бота"),
-            types.BotCommand("credits", "💎 Дневные кредиты"),
-            types.BotCommand("donate", "❤️ Поддержать проект"),
+            types.BotCommand("start", "Запустить бота и открыть приветствие 🍷"),
+            types.BotCommand("menu", "Открыть главное меню разделов 🗂"),
+            types.BotCommand("balance", "Показать баланс и способ пополнения 🪙"),
+            types.BotCommand("profile", "Открыть карточку профиля 🪪"),
+            types.BotCommand("support", "Обратиться в поддержку бота 📨"),
+            types.BotCommand("help", "Показать доступные команды 📎"),
+            types.BotCommand("status", "Проверить текущее состояние бота 📡"),
+            types.BotCommand("credits", "Показать остаток дневных кредитов 🎟"),
+            types.BotCommand("donate", "Поддержать разработку проекта 🌿"),
         ]
         en_commands = [
-            types.BotCommand("start", "🚀 Start Kulsh"),
-            types.BotCommand("menu", "📖 Open the menu"),
-            types.BotCommand("balance", "💳 Balance and top-up"),
-            types.BotCommand("profile", "👤 Profile and stats"),
-            types.BotCommand("support", "💬 Contact support"),
-            types.BotCommand("help", "📚 All commands"),
-            types.BotCommand("status", "🟢 Bot status"),
-            types.BotCommand("credits", "💎 Daily credits"),
-            types.BotCommand("donate", "❤️ Support the project"),
+            types.BotCommand("start", "Start the bot and open the greeting 🍷"),
+            types.BotCommand("menu", "Open the main section menu 🗂"),
+            types.BotCommand("balance", "Show the balance and how to top up 🪙"),
+            types.BotCommand("profile", "Open the profile card 🪪"),
+            types.BotCommand("support", "Contact bot support 📨"),
+            types.BotCommand("help", "Show the available commands 📎"),
+            types.BotCommand("status", "Check the current bot status 📡"),
+            types.BotCommand("credits", "Show the remaining daily credits 🎟"),
+            types.BotCommand("donate", "Support development of the project 🌿"),
         ]
         try:
             await tg_bot.set_my_commands(ru_commands)

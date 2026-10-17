@@ -851,9 +851,7 @@ class DsConfigView(discord.ui.View):
         text = (msg.content or "").strip()
         cfg = self._write()
         if text.lower() in ("отмена", "cancel", "сброс", "reset"):
-            cfg["custom_prompt"] = None
-            save_user_configs()
-            await msg.reply(tr(lang, "cfg_prompt_reset"))
+            pass
         elif text:
             cfg["custom_prompt"] = text[:2000]
             save_user_configs()
@@ -862,6 +860,11 @@ class DsConfigView(discord.ui.View):
             await msg.delete()
         except Exception:
             pass
+        if text.lower() in ("отмена", "cancel", "сброс", "reset", "/cancel"):
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
 
     async def _on_reset_memory(self, interaction: discord.Interaction) -> None:
         if not await self._guard(interaction):
@@ -1048,7 +1051,7 @@ class DsModelView(discord.ui.View):
             if m not in MODEL_LIST:
                 continue
             idx = MODEL_LIST.index(m)
-            label = MODEL_DISPLAY.get(m, m) + (" 💎" if is_paid_model(m) else "")
+            label = MODEL_DISPLAY.get(m, m) + (" 💳" if is_paid_model(m) else "")
             options.append(discord.SelectOption(
                 label=label[:100], value=str(idx), default=cur == m,
             ))
@@ -1290,7 +1293,7 @@ class DsMenuView(discord.ui.View):
         self.add_item(discord.ui.Button(label="🚀 Mini App",
                                         style=discord.ButtonStyle.link, url=MINI_APP_URL, row=2))
         b_balance = discord.ui.Button(label=tr(lang, "btn_balance"),
-                                      style=discord.ButtonStyle.primary, row=2)
+                                      style=discord.ButtonStyle.secondary, row=2)
         b_balance.callback = self._on_balance
         self.add_item(b_balance)
 
@@ -1389,35 +1392,34 @@ def _ds_money(value: float) -> str:
 
 
 def _ds_balance_embed(lang: str, user_id: int, nick: str) -> discord.Embed:
+    del nick
     bal = _ds_money(get_balance("ds", user_id))
     total = _ds_money(get_total_topup("ds", user_id))
+    pay_url = DONATIONALERTS_PAGE or DONATE_URL
+    code = topup_code("ds", user_id)
     if lang == "ru":
         desc = (
-            f"Привет, **{nick}** 👋\n\n"
-            f"**Баланс:** {bal} ₽\n"
-            f"**Всего пополнено:** {total} ₽\n\n"
-            f"**Пополнение**\n"
-            f"- **Минимум:** {MIN_TOPUP_RUB:.0f} ₽\n"
-            f"- **Код для оплаты:** `{topup_code('ds', user_id)}`\n"
-            f"- **Способ:** кнопка «Пополнить» ниже\n\n"
-            f"Скопируй код и вставь его в поле «Сообщение» при оплате. "
-            f"Без кода платёж не привяжется к аккаунту.\n\n"
-            f"*Обычно платёж зачисляется автоматически. Если этого не произошло — "
-            f"нажми «Проверить платёж».*\n\n"
+            f"- **На счёте:** {bal} ₽\n"
+            f"- **Пополнено:** {total} ₽\n\n"
+            f"**Пополнение**\n\n"
+            f"Минимум — {MIN_TOPUP_RUB:.0f} ₽.\n"
+            f"Код платежа — `{code}`.\n\n"
+            f"> Вставь код в поле «Сообщение» при оплате. Без него платёж не привяжется к аккаунту.\n\n"
+            f"*[Перейди по ссылке и оплати]({pay_url})*\n\n"
+            f"Зачисление обычно проходит само. Если платёж не пришёл — нажми «Проверить платёж».\n\n"
             f"[Пользовательское соглашение]({TERMS_URL}) · [Политика конфиденциальности]({PRIVACY_URL})"
         )
         title = "💳 Баланс"
     else:
         desc = (
-            f"Hey, **{nick}** 👋\n\n"
-            f"**Balance:** {bal} ₽\n"
-            f"**Total topped up:** {total} ₽\n\n"
-            f"**Top up**\n"
-            f"- **Minimum:** {MIN_TOPUP_RUB:.0f} ₽\n"
-            f"- **Payment code:** `{topup_code('ds', user_id)}`\n"
-            f"- **Method:** the “Top up” button below\n\n"
-            f"Copy the code into the donation message. Without it the payment won't be linked to your account.\n\n"
-            f"*Usually credited automatically. If it didn't happen — press “Check payment”.*\n\n"
+            f"- **On account:** {bal} ₽\n"
+            f"- **Topped up:** {total} ₽\n\n"
+            f"**Top up**\n\n"
+            f"Minimum is {MIN_TOPUP_RUB:.0f} ₽.\n"
+            f"Payment code — `{code}`.\n\n"
+            f"> Put the code into the donation message. Without it the payment will not be linked to the account.\n\n"
+            f"*[Open the link and pay]({pay_url})*\n\n"
+            f"It is usually credited on its own. If it does not arrive, press “Check payment”.\n\n"
             f"[Terms of Service]({TERMS_URL}) · [Privacy Policy]({PRIVACY_URL})"
         )
         title = "💳 Balance"
@@ -1426,27 +1428,26 @@ def _ds_balance_embed(lang: str, user_id: int, nick: str) -> discord.Embed:
 
 
 def _ds_profile_embed(lang: str, user_id: int, nick: str) -> discord.Embed:
+    del nick
     bal = _ds_money(get_balance("ds", user_id))
     total = _ds_money(get_total_topup("ds", user_id))
     count = get_topup_count("ds", user_id)
     if lang == "ru":
         desc = (
-            f"**{nick}**\n\n"
             f"**Discord ID:** `{user_id}`\n"
             f"**Баланс:** {bal} ₽\n"
             f"**Всего пополнено:** {total} ₽\n"
             f"**Пополнений:** {count}\n\n"
-            f"*Пополнение и история платежей — в разделе баланса.*"
+            f"Пополнение открывается командой /balance."
         )
         title = "👤 Профиль"
     else:
         desc = (
-            f"**{nick}**\n\n"
             f"**Discord ID:** `{user_id}`\n"
             f"**Balance:** {bal} ₽\n"
             f"**Total topped up:** {total} ₽\n"
             f"**Top-ups:** {count}\n\n"
-            f"*Top-ups and payment history live in the balance section.*"
+            f"Top-up opens with /balance."
         )
         title = "👤 Profile"
     embed = discord.Embed(title=title, description=desc, color=0xA75FFF)
@@ -1486,17 +1487,6 @@ class DsProfileView(discord.ui.View):
         self.user_id = user_id
         self.lang = lang
         self.nick = nick
-        pay_url = DONATIONALERTS_PAGE or DONATE_URL
-        self.add_item(discord.ui.Button(
-            label=("💳 Пополнить" if lang == "ru" else "💳 Top up"),
-            style=discord.ButtonStyle.link, url=pay_url, row=0,
-        ))
-        back = discord.ui.Button(
-            label=("⬅️ Назад" if lang == "ru" else "⬅️ Back"),
-            style=discord.ButtonStyle.primary, row=1,
-        )
-        back.callback = self._on_back
-        self.add_item(back)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -1507,13 +1497,6 @@ class DsProfileView(discord.ui.View):
             return False
         return True
 
-    async def _on_back(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
-        await interaction.edit_original_response(
-            embed=_ds_balance_embed(self.lang, self.user_id, self.nick),
-            view=DsBalanceView(self.user_id, self.lang, self.nick),
-        )
-
 
 class DsBalanceView(discord.ui.View):
     def __init__(self, user_id: int, lang: str, nick: str) -> None:
@@ -1521,26 +1504,15 @@ class DsBalanceView(discord.ui.View):
         self.user_id = user_id
         self.lang = lang
         self.nick = nick
-        pay_url = DONATIONALERTS_PAGE or DONATE_URL
-        self.add_item(discord.ui.Button(
-            label=("💳 Пополнить" if lang == "ru" else "💳 Top up"),
-            style=discord.ButtonStyle.link, url=pay_url, row=0,
-        ))
-        profile = discord.ui.Button(
-            label=("👤 Профиль" if lang == "ru" else "👤 Profile"),
-            style=discord.ButtonStyle.primary, row=1,
-        )
-        profile.callback = self._on_profile
-        self.add_item(profile)
         check = discord.ui.Button(
             label=("🔄 Проверить платёж" if lang == "ru" else "🔄 Check payment"),
-            style=discord.ButtonStyle.secondary, row=1,
+            style=discord.ButtonStyle.secondary, row=0,
         )
         check.callback = self._on_check
         self.add_item(check)
         support = discord.ui.Button(
             label=("💬 Поддержка" if lang == "ru" else "💬 Support"),
-            style=discord.ButtonStyle.secondary, row=2,
+            style=discord.ButtonStyle.secondary, row=0,
         )
         support.callback = self._on_support
         self.add_item(support)
@@ -1553,13 +1525,6 @@ class DsBalanceView(discord.ui.View):
             )
             return False
         return True
-
-    async def _on_profile(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
-        await interaction.edit_original_response(
-            embed=_ds_profile_embed(self.lang, self.user_id, self.nick),
-            view=DsProfileView(self.user_id, self.lang, self.nick),
-        )
 
     async def _on_check(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -1601,13 +1566,12 @@ async def ds_slash_profile(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
     nick = getattr(interaction.user, "display_name", None) or interaction.user.name
     embed = _ds_profile_embed(lang, interaction.user.id, nick)
-    view = DsProfileView(interaction.user.id, lang, nick)
     if interaction.guild is None:
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed)
         return
     await interaction.response.defer(ephemeral=True)
     try:
-        await interaction.user.send(embed=embed, view=view)
+        await interaction.user.send(embed=embed)
         await interaction.followup.send("🍷 Профиль — у тебя в личке", ephemeral=True)
     except Exception:
         await interaction.followup.send(

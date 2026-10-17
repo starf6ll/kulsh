@@ -107,6 +107,7 @@ TEXTS: dict[str, tuple[str, str]] = {
                                 "Settings — language, theme, model, prompt, search"),
     "menu_commands":           ("Команды — полный список возможностей",
                                 "Commands — full feature list"),
+    "menu_balance_item":       ("Баланс — счёт и пополнение", "Balance — account and top-up"),
     "menu_donate_item":        ("Донат — поддержка разработки", "Donate — support development"),
     "menu_github_item":        ("GitHub — исходный код проекта", "GitHub — project source code"),
 

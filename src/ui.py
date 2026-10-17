@@ -177,7 +177,7 @@ def build_model_keyboard(platform: str, chat_id: int, user_id: int,
             continue
         idx = MODEL_LIST.index(model)
         mark = "🔘" if cur == model else "▫️"
-        gem = " 💎" if is_paid_model(model) else ""
+        gem = " 💳" if is_paid_model(model) else ""
         row.append(btn(f"{mark} {MODEL_DISPLAY.get(model, model)}{gem}", style=None,
                        callback_data=f"cfg:model_set:{idx}"))
         if len(row) == 2:
@@ -301,6 +301,7 @@ def build_menu_text(lang: str) -> str:
         f"- {tr(lang, 'menu_mini_app')}\n"
         f"- {tr(lang, 'menu_settings_item')}\n"
         f"- {tr(lang, 'menu_commands')}\n"
+        f"- {tr(lang, 'menu_balance_item')}\n"
         f"- {tr(lang, 'menu_donate_item')}\n"
         f"- {tr(lang, 'menu_github_item')}"
     )
@@ -327,7 +328,7 @@ def build_menu_keyboard(lang: str, is_private: bool = True) -> InlineKeyboardMar
         btn(tr(lang, "btn_commands"), style=None, callback_data="menu:help"),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(tr(lang, "btn_balance"), style="primary", callback_data="menu:balance"),
+        btn(tr(lang, "btn_balance"), style=None, callback_data="menu:balance"),
         btn(tr(lang, "btn_donate"), style=None, url=DONATE_URL),
     )
     kb.row(btn(tr(lang, "btn_github"), style=None, url=GITHUB_URL))  # pyright: ignore[reportUnknownMemberType]
@@ -345,7 +346,7 @@ def build_start_keyboard(lang: str, is_private: bool = True) -> InlineKeyboardMa
         btn(tr(lang, "btn_settings"), style=None, callback_data="menu:settings"),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(tr(lang, "btn_balance"), style="primary", callback_data="menu:balance"),
+        btn(tr(lang, "btn_balance"), style=None, callback_data="menu:balance"),
         btn(tr(lang, "btn_donate"), style=None, url=DONATE_URL),
     )
     kb.row(btn(tr(lang, "btn_github"), style=None, url=GITHUB_URL))  # pyright: ignore[reportUnknownMemberType]

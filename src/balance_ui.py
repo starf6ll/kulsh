@@ -28,38 +28,34 @@ from src.billing import (
     poll_donations_once,
     topup_code,
 )
-from src.rich import edit_rich_message, send_formatted, send_rich_message
+from src.rich import edit_rich_message, send_formatted, send_formatted_returning_id
 from src.ui import btn
-from src.util import DONATE_URL, logger, markdown_like_to_telegram_html
+from src.util import DONATE_URL, bind_ui_flow, config_children_msgs, logger, markdown_like_to_telegram_html
 
-SUPPORT_WAITING: dict[int, int] = {}
+SUPPORT_WAITING: dict[int, dict[str, int]] = {}
+_GAP = "\u2060"
 
 TXT = {
-    "hello": ("Привет, {0} 👋", "Hey, {0} 👋"),
     "balance_title": ("💳 Баланс", "💳 Balance"),
     "profile_title": ("👤 Профиль", "👤 Profile"),
-    "balance_col": ("Баланс", "Balance"),
-    "topup_col": ("Всего пополнено", "Total topped up"),
+    "on_account": ("На счёте", "On account"),
+    "topped": ("Пополнено", "Topped up"),
     "topup_section": ("Пополнение", "Top up"),
-    "min": ("Минимум", "Minimum"),
-    "code": ("Код для оплаты", "Payment code"),
-    "method": ("Способ", "Method"),
-    "method_value": ("кнопка «Пополнить» ниже", "the “Top up” button below"),
+    "min_line": ("Минимум — {0:.0f} ₽.", "Minimum is {0:.0f} ₽."),
+    "code_line": ("Код платежа — `{0}`.", "Payment code — `{0}`."),
     "code_hint": (
-        "Скопируй код и вставь его в поле «Сообщение» при оплате. Без кода платёж не привяжется к аккаунту.",
-        "Copy the code into the donation message. Without it the payment won't be linked to your account.",
+        "Вставь код в поле «Сообщение» при оплате. Без него платёж не привяжется к аккаунту.",
+        "Put the code into the donation message. Without it the payment will not be linked to the account.",
     ),
+    "pay_link": ("Перейди по ссылке и оплати", "Open the link and pay"),
     "auto_note": (
-        "Обычно платёж зачисляется автоматически. Если этого не произошло — нажми «Проверить платёж».",
-        "Usually credited automatically. If it didn't happen — press “Check payment”.",
+        "Зачисление обычно проходит само. Если платёж не пришёл — нажми «Проверить платёж».",
+        "It is usually credited on its own. If it does not arrive, press “Check payment”.",
     ),
     "tg_id": ("Telegram ID", "Telegram ID"),
     "topups": ("Пополнений", "Top-ups"),
-    "profile_note": ("Пополнение и история платежей — в разделе баланса.", "Top-ups and payment history live in the balance section."),
-    "topup_btn": ("💳 Пополнить", "💳 Top up"),
+    "profile_note": ("Пополнение открывается командой /balance.", "Top-up opens with /balance."),
     "check": ("🔄 Проверить платёж", "🔄 Check payment"),
-    "profile": ("👤 Профиль", "👤 Profile"),
-    "back": ("⬅️ Назад", "⬅️ Back"),
     "support": ("💬 Поддержка", "💬 Support"),
     "close": ("❌ Закрыть", "❌ Close"),
     "paid": ("Зачислено: +{0:.2f} ₽", "Credited: +{0:.2f} ₽"),
@@ -108,63 +104,60 @@ def _legal(lang: str) -> str:
 
 
 def balance_text(lang: str, user_id: int, nick: str) -> str:
+    del nick
     bal = _money(get_balance("tg", user_id))
     total = _money(get_total_topup("tg", user_id))
     code = topup_code("tg", user_id)
+    pay_url = DONATIONALERTS_PAGE or DONATE_URL
     return (
         f"# {t(lang, 'balance_title')}\n\n"
         f"---\n\n"
-        f"{t(lang, 'hello', _safe(nick))}\n\n"
-        f"|*{t(lang, 'balance_col')}*|*{t(lang, 'topup_col')}*|\n"
-        f"|{bal} ₽|{total} ₽|\n\n"
+        f"- **{t(lang, 'on_account')}:** {bal} ₽\n"
+        f"- **{t(lang, 'topped')}:** {total} ₽\n\n"
         f"---\n\n"
-        f"## {t(lang, 'topup_section')}\n\n"
-        f"- **{t(lang, 'min')}:** {MIN_TOPUP_RUB:.0f} ₽\n"
-        f"- **{t(lang, 'code')}:** `{code}`\n"
-        f"- **{t(lang, 'method')}:** {t(lang, 'method_value')}\n\n"
+        f"**{t(lang, 'topup_section')}**\n\n"
+        f"{t(lang, 'min_line', MIN_TOPUP_RUB)}\n"
+        f"{t(lang, 'code_line', code)}\n\n"
+        f"{_GAP}\n\n"
         f"> {t(lang, 'code_hint')}\n\n"
-        f"*{t(lang, 'auto_note')}*\n\n"
+        f"{_GAP}\n\n"
+        f"*[{t(lang, 'pay_link')}]({pay_url})*\n\n"
+        f"{t(lang, 'auto_note')}\n\n"
         f"---\n\n"
         f"{_legal(lang)}"
     )
 
 
 def profile_text(lang: str, user_id: int, nick: str) -> str:
+    del nick
     bal = _money(get_balance("tg", user_id))
     total = _money(get_total_topup("tg", user_id))
     count = get_topup_count("tg", user_id)
     return (
         f"# {t(lang, 'profile_title')}\n\n"
         f"---\n\n"
-        f"**{_safe(nick)}**\n\n"
-        f"|*{t(lang, 'tg_id')}*|*{t(lang, 'balance_col')}*|\n"
-        f"|`{user_id}`|{bal} ₽|\n\n"
-        f"- **{t(lang, 'topup_col')}:** {total} ₽\n"
+        f"- **{t(lang, 'tg_id')}:** `{user_id}`\n"
+        f"- **{t(lang, 'on_account')}:** {bal} ₽\n"
+        f"- **{t(lang, 'topped')}:** {total} ₽\n"
         f"- **{t(lang, 'topups')}:** {count}\n\n"
-        f"> {t(lang, 'profile_note')}"
+        f"---\n\n"
+        f"{t(lang, 'profile_note')}"
     )
 
 
 def balance_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
-    pay_url = DONATIONALERTS_PAGE or DONATE_URL
-    kb.row(btn(t(lang, "topup_btn"), style="success", url=pay_url))  # pyright: ignore[reportUnknownMemberType]
     kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(t(lang, "profile"), style="primary", callback_data="menu:profile"),
         btn(t(lang, "check"), style=None, callback_data="menu:checkpay"),
-    )
-    kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(t(lang, "support"), style=None, callback_data="menu:support"),
-        btn(t(lang, "close"), style="danger", callback_data="menu:close"),
     )
+    kb.row(btn(t(lang, "close"), style="danger", callback_data="menu:close"))  # pyright: ignore[reportUnknownMemberType]
     return kb
 
 
 def profile_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
-    pay_url = DONATIONALERTS_PAGE or DONATE_URL
-    kb.row(btn(t(lang, "topup_btn"), style="success", url=pay_url))  # pyright: ignore[reportUnknownMemberType]
-    kb.row(btn(t(lang, "back"), style="primary", callback_data="menu:balance"))  # pyright: ignore[reportUnknownMemberType]
+    kb.row(btn(t(lang, "close"), style="danger", callback_data="menu:close"))  # pyright: ignore[reportUnknownMemberType]
     return kb
 
 
@@ -203,45 +196,53 @@ async def _dm_screen(bot: Any, chat_id: int, user_id: int, lang: str, nick: str,
                      screen: str, reply_to: int | None) -> None:
     text = screen_text(screen, lang, user_id, nick)
     kb = screen_keyboard(screen, lang)
+    extra: list[tuple[int, int]] = []
+    if reply_to:
+        extra.append((chat_id, reply_to))
     try:
-        sent = await send_rich_message(user_id, text, reply_markup=kb)
-        if not sent:
-            # Прямая отправка нужна, чтобы отличить закрытые ЛС от сбоя rich-API.
-            await bot.send_message(
-                user_id, markdown_like_to_telegram_html(text),
-                parse_mode="HTML", reply_markup=kb,
-            )
+        mid = await send_formatted_returning_id(user_id, text, reply_markup=kb)
+        if not mid:
+            raise RuntimeError("dm closed")
     except Exception as e:
         logger.warning(f"balance dm: {e}")
         username = getattr(getattr(bot, "user", None), "username", "") or ""
         link = f"https://t.me/{username}?start={screen}" if username else "—"
         await send_formatted(chat_id, t(lang, "dm_fail", link), reply_to=reply_to)
         return
+    note_id = None
     try:
-        await bot.send_message(chat_id, t(lang, "dm_sent"), reply_to_message_id=reply_to)
+        note = await bot.send_message(chat_id, t(lang, "dm_sent"), reply_to_message_id=reply_to)
+        note_id = getattr(note, "message_id", None)
     except Exception:
-        pass
+        note_id = None
+    if note_id:
+        extra.append((chat_id, note_id))
+    bind_ui_flow(mid, user_id, user_id, origin_id=None, extra=extra)
 
 
 async def send_balance_menu_tg(bot: Any, chat_id: int, user_id: int, lang: str,
-                               nick: str, reply_to: int | None = None) -> None:
-    await send_screen_tg(bot, chat_id, user_id, lang, nick, screen="balance", reply_to=reply_to)
+                               nick: str, reply_to: int | None = None, origin_id: int | None = None) -> None:
+    await send_screen_tg(bot, chat_id, user_id, lang, nick, screen="balance",
+                         reply_to=reply_to, origin_id=origin_id or reply_to)
 
 
 async def send_profile_tg(bot: Any, chat_id: int, user_id: int, lang: str,
-                          nick: str, reply_to: int | None = None) -> None:
-    await send_screen_tg(bot, chat_id, user_id, lang, nick, screen="profile", reply_to=reply_to)
+                          nick: str, reply_to: int | None = None, origin_id: int | None = None) -> None:
+    await send_screen_tg(bot, chat_id, user_id, lang, nick, screen="profile",
+                         reply_to=reply_to, origin_id=origin_id or reply_to)
 
 
 async def send_screen_tg(bot: Any, chat_id: int, user_id: int, lang: str, nick: str,
-                         screen: str = "balance", reply_to: int | None = None) -> None:
+                         screen: str = "balance", reply_to: int | None = None,
+                         origin_id: int | None = None) -> None:
     if chat_id != user_id:
         await _dm_screen(bot, chat_id, user_id, lang, nick, screen, reply_to)
         return
-    await send_formatted(
+    mid = await send_formatted_returning_id(
         chat_id, screen_text(screen, lang, user_id, nick),
         reply_to=reply_to, reply_markup=screen_keyboard(screen, lang),
     )
+    bind_ui_flow(mid, chat_id, user_id, origin_id=origin_id or reply_to)
 
 
 async def check_payment_tg(bot: Any, chat_id: int, user_id: int, lang: str) -> None:
@@ -261,11 +262,15 @@ async def check_payment_tg(bot: Any, chat_id: int, user_id: int, lang: str) -> N
 
 
 async def start_support_tg(bot: Any, chat_id: int, user_id: int, lang: str) -> None:
-    SUPPORT_WAITING[user_id] = chat_id
+    ask_id = 0
     try:
-        await bot.send_message(chat_id, t(lang, "support_ask"))
+        sent = await bot.send_message(chat_id, t(lang, "support_ask"))
+        ask_id = int(getattr(sent, "message_id", 0) or 0)
     except Exception as e:
         logger.warning(f"support ask: {e}")
+    SUPPORT_WAITING[user_id] = {"chat_id": chat_id, "ask_id": ask_id}
+    if ask_id:
+        config_children_msgs.setdefault((chat_id, user_id), []).append(ask_id)
 
 
 async def submit_support_tg(bot: Any, user_id: int, chat_id: int, text: str, lang: str) -> None:
