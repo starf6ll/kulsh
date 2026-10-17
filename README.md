@@ -406,9 +406,11 @@ The bot has a real ruble balance. Free models cost nothing; paid models are char
 Everything else is free. Big paid models are never used for PSL / Femboy ratings — those always run on a cheap model. When a paid model is selected with an empty balance, the bot refuses the request with a clear in-chat notice (current balance, the model, and where to top up) instead of silently spending on a paid cascade.
 
 ### Top-up flow
-1. Run `/balance` (or press “Баланс” in the menu) and copy the code `ID<your id>`.
-2. Donate via the button and paste the code into the DonationAlerts **message** field.
+1. Run `/balance` (or press “Баланс” in the menu) and copy the tag `ID<your id>`.
+2. Open the payment link from the same screen and paste the tag into the DonationAlerts **message** field.
 3. The donation poller credits the matching account automatically; “Проверить платёж” forces an immediate check.
+
+The minimum top-up is 1 ₽ by default and can be changed with `DONATIONALERTS_MIN_TOPUP`.
 
 If `/balance` is used in a group, the menu is delivered to DM. When the DM is closed, the bot replies in chat with a `https://t.me/<bot>?start=balance` link. Legal documents: [Пользовательское соглашение](https://telegra.ph/Kulsh-AI--Polzovatelskoe-soglashenie-10-17) · [Политика конфиденциальности](https://telegra.ph/Kulsh-AI--Politika-konfidencialnosti-10-17-2).
 

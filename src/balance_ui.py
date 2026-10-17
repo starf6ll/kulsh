@@ -33,7 +33,6 @@ from src.ui import btn
 from src.util import DONATE_URL, bind_ui_flow, config_children_msgs, logger, markdown_like_to_telegram_html
 
 SUPPORT_WAITING: dict[int, dict[str, int]] = {}
-_GAP = "\u2060"
 
 TXT = {
     "balance_title": ("💳 Баланс", "💳 Balance"),
@@ -41,13 +40,14 @@ TXT = {
     "on_account": ("На счёте", "On account"),
     "topped": ("Пополнено", "Topped up"),
     "topup_section": ("Пополнение", "Top up"),
-    "min_line": ("Минимум — {0:.0f} ₽.", "Minimum is {0:.0f} ₽."),
-    "code_line": ("Код платежа — `{0}`.", "Payment code — `{0}`."),
+    "tag": ("Твой тег для пополнения", "Your top-up tag"),
+    "min": ("Минимальная сумма", "Minimum amount"),
+    "pay": ("Ссылка на оплату", "Payment link"),
+    "pay_action": ("Оплатить", "Pay"),
     "code_hint": (
         "Вставь код в поле «Сообщение» при оплате. Без него платёж не привяжется к аккаунту.",
         "Put the code into the donation message. Without it the payment will not be linked to the account.",
     ),
-    "pay_link": ("Перейди по ссылке и оплати", "Open the link and pay"),
     "auto_note": (
         "Зачисление обычно проходит само. Если платёж не пришёл — нажми «Проверить платёж».",
         "It is usually credited on its own. If it does not arrive, press “Check payment”.",
@@ -112,16 +112,14 @@ def balance_text(lang: str, user_id: int, nick: str) -> str:
     return (
         f"# {t(lang, 'balance_title')}\n\n"
         f"---\n\n"
-        f"- **{t(lang, 'on_account')}:** {bal} ₽\n"
-        f"- **{t(lang, 'topped')}:** {total} ₽\n\n"
+        f"|*{t(lang, 'on_account')}*|*{t(lang, 'topped')}*|\n"
+        f"|{bal} ₽|{total} ₽|\n\n"
         f"---\n\n"
         f"**{t(lang, 'topup_section')}**\n\n"
-        f"{t(lang, 'min_line', MIN_TOPUP_RUB)}\n"
-        f"{t(lang, 'code_line', code)}\n\n"
-        f"{_GAP}\n\n"
+        f"- **{t(lang, 'tag')}:** `{code}`\n"
+        f"- **{t(lang, 'min')}:** {MIN_TOPUP_RUB:.0f} ₽\n"
+        f"- **{t(lang, 'pay')}:** [{t(lang, 'pay_action')}]({pay_url})\n\n"
         f"> {t(lang, 'code_hint')}\n\n"
-        f"{_GAP}\n\n"
-        f"*[{t(lang, 'pay_link')}]({pay_url})*\n\n"
         f"{t(lang, 'auto_note')}\n\n"
         f"---\n\n"
         f"{_legal(lang)}"
@@ -136,8 +134,8 @@ def profile_text(lang: str, user_id: int, nick: str) -> str:
     return (
         f"# {t(lang, 'profile_title')}\n\n"
         f"---\n\n"
-        f"- **{t(lang, 'tg_id')}:** `{user_id}`\n"
-        f"- **{t(lang, 'on_account')}:** {bal} ₽\n"
+        f"|*{t(lang, 'tg_id')}*|*{t(lang, 'on_account')}*|\n"
+        f"|`{user_id}`|{bal} ₽|\n\n"
         f"- **{t(lang, 'topped')}:** {total} ₽\n"
         f"- **{t(lang, 'topups')}:** {count}\n\n"
         f"---\n\n"

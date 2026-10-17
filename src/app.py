@@ -306,26 +306,26 @@ async def main() -> None:
 
     async def start_telegram() -> None:
         ru_commands = [
-            types.BotCommand("start", "Запустить бота и открыть приветствие 🍷"),
-            types.BotCommand("menu", "Открыть главное меню разделов 🗂"),
-            types.BotCommand("balance", "Показать баланс и способ пополнения 🪙"),
-            types.BotCommand("profile", "Открыть карточку профиля 🪪"),
-            types.BotCommand("support", "Обратиться в поддержку бота 📨"),
-            types.BotCommand("help", "Показать доступные команды 📎"),
-            types.BotCommand("status", "Проверить текущее состояние бота 📡"),
-            types.BotCommand("credits", "Показать остаток дневных кредитов 🎟"),
-            types.BotCommand("donate", "Поддержать разработку проекта 🌿"),
+            types.BotCommand("start", "🚀 Запустить Кульша"),
+            types.BotCommand("menu", "📖 Открыть меню"),
+            types.BotCommand("balance", "💳 Баланс и пополнение"),
+            types.BotCommand("profile", "👤 Профиль и статистика"),
+            types.BotCommand("support", "💬 Написать в поддержку"),
+            types.BotCommand("help", "📚 Список всех команд"),
+            types.BotCommand("status", "🟢 Состояние бота"),
+            types.BotCommand("credits", "💎 Дневные кредиты"),
+            types.BotCommand("donate", "❤️ Поддержать проект"),
         ]
         en_commands = [
-            types.BotCommand("start", "Start the bot and open the greeting 🍷"),
-            types.BotCommand("menu", "Open the main section menu 🗂"),
-            types.BotCommand("balance", "Show the balance and how to top up 🪙"),
-            types.BotCommand("profile", "Open the profile card 🪪"),
-            types.BotCommand("support", "Contact bot support 📨"),
-            types.BotCommand("help", "Show the available commands 📎"),
-            types.BotCommand("status", "Check the current bot status 📡"),
-            types.BotCommand("credits", "Show the remaining daily credits 🎟"),
-            types.BotCommand("donate", "Support development of the project 🌿"),
+            types.BotCommand("start", "🚀 Start Kulsh"),
+            types.BotCommand("menu", "📖 Open the menu"),
+            types.BotCommand("balance", "💳 Balance and top-up"),
+            types.BotCommand("profile", "👤 Profile and stats"),
+            types.BotCommand("support", "💬 Contact support"),
+            types.BotCommand("help", "📚 All commands"),
+            types.BotCommand("status", "🟢 Bot status"),
+            types.BotCommand("credits", "💎 Daily credits"),
+            types.BotCommand("donate", "❤️ Support the project"),
         ]
         try:
             await tg_bot.set_my_commands(ru_commands)

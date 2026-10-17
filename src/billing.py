@@ -28,7 +28,7 @@ DA_TOKEN_FILE = 'da_token.json'
 
 DONATIONALERTS_API = "https://www.donationalerts.com/api/v1"
 DONATIONALERTS_OAUTH = "https://www.donationalerts.com/oauth/token"
-MIN_TOPUP_RUB = 80.0
+MIN_TOPUP_RUB = float(os.getenv("DONATIONALERTS_MIN_TOPUP") or "1")
 TOPUP_CURRENCY = os.getenv("DONATIONALERTS_CURRENCY") or "RUB"
 DONATIONALERTS_PAGE = os.getenv("DONATIONALERTS_PAGE") or ""
 
