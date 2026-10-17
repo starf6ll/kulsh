@@ -33,6 +33,8 @@ from src.ui import btn
 from src.util import DONATE_URL, bind_ui_flow, config_children_msgs, logger, markdown_like_to_telegram_html
 
 SUPPORT_WAITING: dict[int, dict[str, int]] = {}
+# Невидимый абзац: rich-рендер не схлопывает его, поэтому он даёт пустую строку-отступ.
+_GAP = "\u2060"
 
 TXT = {
     "balance_title": ("💳 Баланс", "💳 Balance"),
@@ -43,7 +45,6 @@ TXT = {
     "tag": ("Твой тег для пополнения", "Your top-up tag"),
     "min": ("Минимальная сумма", "Minimum amount"),
     "pay": ("Ссылка на оплату", "Payment link"),
-    "pay_action": ("Оплатить", "Pay"),
     "code_hint": (
         "Вставь код в поле «Сообщение» при оплате. Без него платёж не привяжется к аккаунту.",
         "Put the code into the donation message. Without it the payment will not be linked to the account.",
@@ -118,8 +119,10 @@ def balance_text(lang: str, user_id: int, nick: str) -> str:
         f"**{t(lang, 'topup_section')}**\n\n"
         f"- **{t(lang, 'tag')}:** `{code}`\n"
         f"- **{t(lang, 'min')}:** {MIN_TOPUP_RUB:.0f} ₽\n"
-        f"- **{t(lang, 'pay')}:** [{t(lang, 'pay_action')}]({pay_url})\n\n"
+        f"- **[{t(lang, 'pay')}]({pay_url})**\n\n"
+        f"{_GAP}\n\n"
         f"> {t(lang, 'code_hint')}\n\n"
+        f"{_GAP}\n\n"
         f"{t(lang, 'auto_note')}\n\n"
         f"---\n\n"
         f"{_legal(lang)}"
@@ -136,6 +139,7 @@ def profile_text(lang: str, user_id: int, nick: str) -> str:
         f"---\n\n"
         f"|*{t(lang, 'tg_id')}*|*{t(lang, 'on_account')}*|\n"
         f"|`{user_id}`|{bal} ₽|\n\n"
+        f"{_GAP}\n\n"
         f"- **{t(lang, 'topped')}:** {total} ₽\n"
         f"- **{t(lang, 'topups')}:** {count}\n\n"
         f"---\n\n"
