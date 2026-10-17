@@ -403,7 +403,7 @@ The bot has a real ruble balance. Free models cost nothing; paid models are char
 | Claude Sonnet 5.5 | $0.40 | $2.00 | $0.04 |
 | Qwen3.8 Max | $0.20 | $1.00 | $0.02 |
 
-Everything else is free. Big paid models are never used for PSL / Femboy ratings — those always run on a cheap model. When a paid model is selected with an empty balance, the bot switches to a free model and says so in chat instead of silently spending.
+Everything else is free. Big paid models are never used for PSL / Femboy ratings — those always run on a cheap model. When a paid model is selected with an empty balance, the bot refuses the request with a clear in-chat notice (current balance, the model, and where to top up) instead of silently spending on a paid cascade.
 
 ### Top-up flow
 1. Run `/balance` (or press “Баланс” in the menu) and copy the code `ID<your id>`.
