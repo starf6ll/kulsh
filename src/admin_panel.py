@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from src.billing import SUPPORT_ADMIN_DS, SUPPORT_ADMIN_TG, add_balance
+from src import promo
 from src.util import (
     AUTHORIZED_UPDATERS,
     MSK,
@@ -170,7 +171,51 @@ def _kb(bot_btn: Any) -> Any:
         bot_btn("Пополнить", callback_data="adm:topup"),
         bot_btn("Рассылка", callback_data="adm:cast"),
     )
+    kb.row(bot_btn("🎁 Промокоды", callback_data="adm:promos"))  # pyright: ignore[reportUnknownMemberType]
     kb.row(bot_btn("Закрыть", style="danger", callback_data="adm:close"))  # pyright: ignore[reportUnknownMemberType]
+    return kb
+
+
+def promo_text() -> str:
+    items = promo.list_promos()
+    lines = ["# 🎁 Промокоды", "", "---", ""]
+    if not items:
+        lines.append("Пока ни одного промокода.")
+    else:
+        for item in items[:10]:
+            code = str(item.get("code") or "")
+            kind = str(item.get("type") or "")
+            value = int(item.get("value") or 0)
+            uses = int(item.get("uses") or 0)
+            active = bool(item.get("active", True))
+            expires = int(item.get("expiresAt") or 0)
+            value_label = f"{value} ₽" if kind == "amount" else f"+{value}%"
+            uses_label = f"{item.get('activations', 0)}/{uses}" if uses else f"{item.get('activations', 0)}/∞"
+            exp = datetime.fromtimestamp(expires, MSK).strftime("%d.%m") if expires else "—"
+            lines.append(
+                f"- **{code}** · {value_label} · {uses_label} · до {exp} · {'вкл' if active else 'выкл'}"
+            )
+    lines += [
+        "",
+        "---",
+        "",
+        "Создать: `КОД amount 500 10 7` или `КОД bonus 25 0 0`.",
+        "Где 10 — лимит активаций (0 — без лимита), 7 — дней жизни (0 — бессрочно).",
+    ]
+    return "\n".join(lines)
+
+
+def _promo_kb(bot_btn: Any) -> Any:
+    from telebot.types import InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup()
+    kb.row(  # pyright: ignore[reportUnknownMemberType]
+        bot_btn("Создать", callback_data="adm:promo_new"),
+        bot_btn("Вкл/выкл", callback_data="adm:promo_toggle"),
+    )
+    kb.row(  # pyright: ignore[reportUnknownMemberType]
+        bot_btn("Удалить", callback_data="adm:promo_del"),
+        bot_btn("Назад", callback_data="adm:home"),
+    )
     return kb
 
 
@@ -280,6 +325,45 @@ async def take_admin_input(bot: Any, message: Any) -> bool:
         if ask_id:
             await _edit_tg(bot, chat_id, int(ask_id), f"# 🛠 Админ-панель\n\n---\n\n{result}", _kb(__import__('src.ui', fromlist=['btn']).btn))
         return True
+    if step in ("promo_new", "promo_toggle", "promo_del"):
+        ask_id = state.get("ask_id")
+        _wait.pop(user.id, None)
+        await _wipe(bot, chat_id, message.message_id)
+        result = ""
+        if step == "promo_new":
+            parts = text.split()
+            if len(parts) < 3:
+                result = "Формат: `КОД amount 500 10 7` или `КОД bonus 25 0 0`."
+            else:
+                code = parts[0]
+                kind = parts[1].lower()
+                try:
+                    value = int(float(parts[2]))
+                    uses = int(parts[3]) if len(parts) > 3 else 0
+                    days = int(parts[4]) if len(parts) > 4 else 0
+                except ValueError:
+                    result = "Значения должны быть числами."
+                else:
+                    expires = int(time.time() + days * 86400) if days > 0 else 0
+                    ok, detail = promo.create_promo(code, kind, value, uses, expires)
+                    result = f"Промокод **{detail}** создан." if ok else detail
+        else:
+            code = text.split()[0] if text.split() else ""
+            item = promo._get(code) if code else None
+            if not item:
+                result = "Такого промокода нет."
+            elif step == "promo_toggle":
+                promo.set_active(code, not bool(item.get("active", True)))
+                result = f"Промокод **{code}**: {'выключен' if item.get('active', True) else 'включён'}."
+            else:
+                promo.delete_promo(code)
+                result = f"Промокод **{code}** удалён."
+        if ask_id:
+            body = promo_text()
+            if result:
+                body = f"# 🎁 Промокоды\n\n---\n\n{result}\n\n---\n\n" + body.split("\n\n---\n\n", 1)[-1]
+            await _edit_tg(bot, chat_id, int(ask_id), body, _promo_kb(__import__('src.ui', fromlist=['btn']).btn))
+        return True
     if step == "cast_msg":
         gid = getattr(message, "media_group_id", None)
         if gid:
@@ -382,6 +466,21 @@ async def on_tg_callback(bot: Any, call: Any) -> None:
             "Подойдёт текст, Rich, премиум-эмодзи, альбом и любое вложение.\n\nОтмена — /cancel.",
             _kb(btn),
         )
+        return
+    if action == "promos":
+        _wait.pop(user_id, None)
+        await _edit_tg(bot, chat_id, msg.message_id, promo_text(), _promo_kb(btn))
+        return
+    if action in ("promo_new", "promo_toggle", "promo_del"):
+        prompts = {
+            "promo_new": "Пришли `КОД amount 500 10 7` или `КОД bonus 25 0 0`.\n\n"
+                         "10 — лимит активаций, 7 — дней жизни. Нули означают «без лимита» и «бессрочно».",
+            "promo_toggle": "Пришли код, который включить или выключить.",
+            "promo_del": "Пришли код, который удалить.",
+        }
+        _wait[user_id] = {"step": action, "ask_id": msg.message_id}
+        await _edit_tg(bot, chat_id, msg.message_id,
+                       f"# 🎁 Промокоды\n\n---\n\n{prompts[action]}\n\nОтмена — /cancel.", _promo_kb(btn))
         return
     state = _wait.get(user_id)
     if not state or state.get("step") != "cast_opts":
@@ -501,6 +600,29 @@ class DsAdminView:
                 "Пришли сообщение для рассылки. Оформление, вложения и эмодзи сохранятся. Отмена — /cancel.",
             )
 
+        async def _promos(interaction: Any) -> None:
+            view = discord.ui.View(timeout=300)
+
+            async def _new(i: Any) -> None:
+                _wait[i.user.id] = {"step": "promo_new", "platform": "ds"}
+                await i.response.send_message(
+                    "Пришли `КОД amount 500 10 7` или `КОД bonus 25 0 0`.", ephemeral=True,
+                )
+
+            async def _toggle(i: Any) -> None:
+                _wait[i.user.id] = {"step": "promo_toggle", "platform": "ds"}
+                await i.response.send_message("Пришли код для включения/выключения.", ephemeral=True)
+
+            async def _del(i: Any) -> None:
+                _wait[i.user.id] = {"step": "promo_del", "platform": "ds"}
+                await i.response.send_message("Пришли код для удаления.", ephemeral=True)
+
+            for label, fn in (("Создать", _new), ("Вкл/выкл", _toggle), ("Удалить", _del)):
+                b = discord.ui.Button(label=label)
+                b.callback = fn
+                view.add_item(b)
+            await interaction.response.send_message(promo_text(), ephemeral=True, view=view)
+
         home = discord.ui.Button(label="Обновить", style=discord.ButtonStyle.secondary, row=0)
         home.callback = _home
         view.add_item(home)
@@ -516,6 +638,9 @@ class DsAdminView:
         cast = discord.ui.Button(label="Рассылка", style=discord.ButtonStyle.secondary, row=1)
         cast.callback = _cast
         view.add_item(cast)
+        promos = discord.ui.Button(label="🎁 Промокоды", style=discord.ButtonStyle.secondary, row=1)
+        promos.callback = _promos
+        view.add_item(promos)
         return view
 
 
@@ -560,6 +685,43 @@ async def take_admin_ds(message: Any) -> bool:
         except Exception:
             pass
         await message.channel.send(result)
+        return True
+    if step in ("promo_new", "promo_toggle", "promo_del"):
+        _wait.pop(message.author.id, None)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        result = ""
+        if step == "promo_new":
+            parts = text.split()
+            if len(parts) < 3:
+                result = "Формат: `КОД amount 500 10 7` или `КОД bonus 25 0 0`."
+            else:
+                code = parts[0]
+                kind = parts[1].lower()
+                try:
+                    value = int(float(parts[2]))
+                    uses = int(parts[3]) if len(parts) > 3 else 0
+                    days = int(parts[4]) if len(parts) > 4 else 0
+                except ValueError:
+                    result = "Значения должны быть числами."
+                else:
+                    expires = int(time.time() + days * 86400) if days > 0 else 0
+                    ok, detail = promo.create_promo(code, kind, value, uses, expires)
+                    result = f"Промокод **{detail}** создан." if ok else detail
+        else:
+            code = text.split()[0] if text.split() else ""
+            item = promo._get(code) if code else None
+            if not item:
+                result = "Такого промокода нет."
+            elif step == "promo_toggle":
+                promo.set_active(code, not bool(item.get("active", True)))
+                result = f"Промокод **{code}**: {'выключен' if item.get('active', True) else 'включён'}."
+            else:
+                promo.delete_promo(code)
+                result = f"Промокод **{code}** удалён."
+        await message.channel.send(result or "Готово.")
         return True
     if step == "cast_msg":
         gid = getattr(message, "message_reference", None)

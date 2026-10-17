@@ -530,6 +530,10 @@ async def handle_tg_text(message: types.Message) -> None:
             await balance_ui.relay_support_reply_tg(_tg().tg_bot, tid, text)
             return
 
+    if user_id in balance_ui.ACCOUNT_WAITING:
+        if await balance_ui.handle_account_input(_tg().tg_bot, message, lang):
+            return
+
     if user_id in balance_ui.SUPPORT_WAITING:
         waiting = balance_ui.SUPPORT_WAITING.get(user_id) or {}
         if text.strip().lower() in ("/cancel", "отмена", "cancel", "/отмена"):

@@ -29,6 +29,7 @@ from src.billing import (
     topup_code,
 )
 from src.charts import extract_chart_marker, render_infographic
+from src import cloud, promo
 from src.draw import process_drawing
 from src.looks import (
     create_battle_infographic,
@@ -1432,12 +1433,33 @@ def _ds_profile_embed(lang: str, user_id: int, nick: str) -> discord.Embed:
     bal = _ds_money(get_balance("ds", user_id))
     total = _ds_money(get_total_topup("ds", user_id))
     count = get_topup_count("ds", user_id)
+    linked = "Discord"
+    usage_line = ""
+    keys_line = ""
+    if cloud.enabled():
+        acct = cloud.resolve("ds", user_id)
+        names: list[str] = []
+        for ident in cloud.account_ids(acct):
+            provider = ident.split(":", 1)[0]
+            label = {"tg": "Telegram", "telegram": "Telegram", "ds": "Discord",
+                     "google": "Google", "github": "GitHub"}.get(provider, provider)
+            if label not in names:
+                names.append(label)
+        linked = ", ".join(names) or "Discord"
+        used = int(cloud.usage(acct).get("used") or 0)
+        usage_line = (f"**Токенов сегодня:** {used:,} / 100 000".replace(",", " ")
+                      if lang == "ru" else f"**Tokens today:** {used:,} / 100,000")
+        keys_line = (f"**API-ключей:** {len(cloud.list_api_keys(acct))}"
+                     if lang == "ru" else f"**API keys:** {len(cloud.list_api_keys(acct))}")
     if lang == "ru":
         desc = (
             f"**Discord ID:** `{user_id}`\n"
             f"**Баланс:** {bal} ₽\n"
             f"**Всего пополнено:** {total} ₽\n"
-            f"**Пополнений:** {count}\n\n"
+            f"**Пополнений:** {count}\n"
+            f"**Привязано:** {linked}\n"
+            f"{usage_line + chr(10) if usage_line else ''}"
+            f"{keys_line + chr(10) if keys_line else ''}\n"
             f"Пополнение открывается командой /balance."
         )
         title = "👤 Профиль"
@@ -1446,7 +1468,10 @@ def _ds_profile_embed(lang: str, user_id: int, nick: str) -> discord.Embed:
             f"**Discord ID:** `{user_id}`\n"
             f"**Balance:** {bal} ₽\n"
             f"**Total topped up:** {total} ₽\n"
-            f"**Top-ups:** {count}\n\n"
+            f"**Top-ups:** {count}\n"
+            f"**Linked:** {linked}\n"
+            f"{usage_line + chr(10) if usage_line else ''}"
+            f"{keys_line + chr(10) if keys_line else ''}\n"
             f"Top-up opens with /balance."
         )
         title = "👤 Profile"
@@ -1481,12 +1506,122 @@ class SupportModal(discord.ui.Modal, title="Поддержка / Support"):
             logger.warning(f"ds support admin: {e}")
 
 
+class PromoModal(discord.ui.Modal, title="Промокод / Promo code"):
+    code: discord.ui.TextInput = discord.ui.TextInput(
+        label="Промокод / Promo code", max_length=24, required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        status, detail = promo.redeem("ds", interaction.user.id, str(self.code.value))
+        prefix = "🎁 " if status.startswith("ok") else "❌ "
+        await interaction.response.send_message(prefix + detail, ephemeral=True)
+
+
+class ApiCreateModal(discord.ui.Modal, title="Новый API-ключ / New API key"):
+    name: discord.ui.TextInput = discord.ui.TextInput(
+        label="Название / Name", max_length=40, required=False, placeholder="Ключ",
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        acct = cloud.resolve("ds", interaction.user.id)
+        created = cloud.create_api_key(acct, str(self.name.value or "Ключ"))
+        if not created or created.get("error"):
+            await interaction.response.send_message(
+                "Лимит — 10 ключей. Отзови один из старых." if (created or {}).get("error") == "limit"
+                else "Хранилище ключей недоступно.", ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            f"Ключ создан. Скопируй сейчас — больше не покажется:\n`{created.get('secret')}`",
+            ephemeral=True,
+        )
+
+
+class ApiRevokeModal(discord.ui.Modal, title="Отозвать ключ / Revoke key"):
+    number: discord.ui.TextInput = discord.ui.TextInput(
+        label="Номер ключа / Key number", max_length=3, required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        acct = cloud.resolve("ds", interaction.user.id)
+        keys = cloud.list_api_keys(acct)
+        try:
+            idx = int(str(self.number.value)) - 1
+        except ValueError:
+            idx = -1
+        if not (0 <= idx < len(keys)):
+            await interaction.response.send_message("Нет такого номера в списке.", ephemeral=True)
+            return
+        cloud.revoke_api_key(acct, str(keys[idx].get("id")))
+        await interaction.response.send_message("Ключ отозван.", ephemeral=True)
+
+
 class DsProfileView(discord.ui.View):
     def __init__(self, user_id: int, lang: str, nick: str) -> None:
         super().__init__(timeout=600)
         self.user_id = user_id
         self.lang = lang
         self.nick = nick
+        link = discord.ui.Button(
+            label=("🔗 Привязать" if lang == "ru" else "🔗 Link"), row=0,
+        )
+        link.callback = self._on_link
+        self.add_item(link)
+        api = discord.ui.Button(
+            label=("🔑 API-ключи" if lang == "ru" else "🔑 API keys"), row=0,
+        )
+        api.callback = self._on_api
+        self.add_item(api)
+        promo_btn = discord.ui.Button(
+            label=("🎁 Промокод" if lang == "ru" else "🎁 Promo"), row=0,
+        )
+        promo_btn.callback = self._on_promo
+        self.add_item(promo_btn)
+
+    async def _on_link(self, interaction: discord.Interaction) -> None:
+        if not cloud.enabled():
+            await interaction.response.send_message("Привязка пока недоступна.", ephemeral=True)
+            return
+        code = cloud.create_link_code("ds", self.user_id, name=self.nick)
+        await interaction.response.send_message(
+            "**Код для сайта:** `{0}`\n\nВойди на https://kulsh.vercel.app/chat через Google или GitHub, "
+            "открой меню аккаунта → «Привязать» и введи код.\n"
+            "Если у аккаунта уже есть баланс — суммы сложатся, сайт предупредит.\n\nКод живёт 15 минут.".format(code),
+            ephemeral=True,
+        )
+
+    async def _on_api(self, interaction: discord.Interaction) -> None:
+        if not cloud.enabled():
+            await interaction.response.send_message("Ключи пока недоступны.", ephemeral=True)
+            return
+        acct = cloud.resolve("ds", self.user_id)
+        keys = cloud.list_api_keys(acct)
+        lines = ["**API-ключи**", ""]
+        if not keys:
+            lines.append("Ключей пока нет.")
+        else:
+            for i, key in enumerate(keys, 1):
+                lines.append(f"{i}. **{key.get('name')}** — `{key.get('prefix')}`")
+        lines += ["", "Публичный API: https://kulsh.vercel.app/api/v1"]
+        view = discord.ui.View(timeout=300)
+        add = discord.ui.Button(label="➕ Создать", row=0)
+
+        async def _create(i: discord.Interaction) -> None:
+            await i.response.send_modal(ApiCreateModal())
+
+        add.callback = _create
+        view.add_item(add)
+        revoke = discord.ui.Button(label="🗑 Отозвать", row=0)
+
+        async def _revoke(i: discord.Interaction) -> None:
+            await i.response.send_modal(ApiRevokeModal())
+
+        revoke.callback = _revoke
+        view.add_item(revoke)
+        await interaction.response.send_message("\n".join(lines), ephemeral=True, view=view)
+
+    async def _on_promo(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(PromoModal())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -1516,6 +1651,12 @@ class DsBalanceView(discord.ui.View):
         )
         support.callback = self._on_support
         self.add_item(support)
+        promo_btn = discord.ui.Button(
+            label=("🎁 Промокод" if lang == "ru" else "🎁 Promo code"),
+            style=discord.ButtonStyle.secondary, row=0,
+        )
+        promo_btn.callback = self._on_promo
+        self.add_item(promo_btn)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -1542,6 +1683,9 @@ class DsBalanceView(discord.ui.View):
     async def _on_support(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(SupportModal())
 
+    async def _on_promo(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(PromoModal())
+
 
 async def ds_slash_balance(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
@@ -1566,12 +1710,13 @@ async def ds_slash_profile(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
     nick = getattr(interaction.user, "display_name", None) or interaction.user.name
     embed = _ds_profile_embed(lang, interaction.user.id, nick)
+    view = DsProfileView(interaction.user.id, lang, nick)
     if interaction.guild is None:
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, view=view)
         return
     await interaction.response.defer(ephemeral=True)
     try:
-        await interaction.user.send(embed=embed)
+        await interaction.user.send(embed=embed, view=view)
         await interaction.followup.send("🍷 Профиль — у тебя в личке", ephemeral=True)
     except Exception:
         await interaction.followup.send(

@@ -455,3 +455,51 @@ Donate: [https://kulsh-ai.web.app/donate.html](https://kulsh-ai.web.app/donate.h
 
 ## 📜 License
 This project is licensed under the AGPL v3.0 License – see the [LICENSE file](LICENSE) for details.
+## Shared accounts with the website
+
+The bot and [kulsh-web](https://github.com/starfall-apk/kulsh-web) use one account
+and one balance. Both read and write the same Upstash Redis keys, so a top-up or a
+paid request in Telegram/Discord is immediately visible on the site and in the public API.
+
+Set these environment variables (Vercel adds them automatically when you connect
+Upstash Redis to the web project):
+
+```
+KV_REST_API_URL=https://...upstash.io
+KV_REST_API_TOKEN=...
+```
+
+When they are missing the bot falls back to the old local `balances.json`, so local
+development keeps working. On the first start with cloud enabled the old balances are
+copied into Redis once (`cloud_migrated.json` marks the migration).
+
+### Linking
+
+`/profile` → **🔗 Привязать аккаунт** gives a one-time 8-character code. On the site:
+account menu → **Привязать** → enter the code. Telegram logins on the site use the
+same `tg:<id>` identity as the bot, so a Telegram sign-in already shares the balance.
+Google and GitHub are attached to the same account the same way.
+
+If the chosen sign-in method already belongs to another account, the site shows a
+warning with both balances and the resulting sum. After confirmation the accounts are
+merged: balances and total top-ups are summed, daily usage takes the larger value,
+API keys are combined (up to 10). Old sessions keep working through a merge redirect.
+
+### Promo codes
+
+Admin panel → **🎁 Промокоды**:
+
+```
+КОД amount 500 10 7   # 500 ₽, 10 activations, 7 days
+КОД bonus 25 0 0      # +25% to the next top-up, unlimited, no expiry
+```
+
+Users redeem them with `/profile` → **🎁 Промокод** or the same button on the balance
+screen. A bonus is applied automatically to the next DonationAlerts payment and then
+cleared. Each account can use a code once.
+
+### API keys
+
+`/profile` → **🔑 API-ключи** creates and revokes keys for the public API
+(`https://kulsh.vercel.app/api/v1`). The secret is shown once; only a SHA-256 hash is
+stored. Keys are shared with the site, where the same list is available in the account menu.

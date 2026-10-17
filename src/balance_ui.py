@@ -28,13 +28,24 @@ from src.billing import (
     poll_donations_once,
     topup_code,
 )
+from src import cloud, promo
 from src.rich import edit_rich_message, send_formatted, send_formatted_returning_id
 from src.ui import btn
 from src.util import DONATE_URL, bind_ui_flow, config_children_msgs, logger, markdown_like_to_telegram_html
 
 SUPPORT_WAITING: dict[int, dict[str, int]] = {}
+# Ожидание ввода для аккаунта: промокод, имя API-ключа, номер ключа.
+ACCOUNT_WAITING: dict[int, dict[str, Any]] = {}
 # Невидимый абзац: rich-рендер не схлопывает его, поэтому он даёт пустую строку-отступ.
 _GAP = "\u2060"
+
+PROVIDER_NAMES = {
+    "tg": ("Telegram", "Telegram"),
+    "telegram": ("Telegram", "Telegram"),
+    "ds": ("Discord", "Discord"),
+    "google": ("Google", "Google"),
+    "github": ("GitHub", "GitHub"),
+}
 
 TXT = {
     "balance_title": ("💳 Баланс", "💳 Balance"),
@@ -59,6 +70,56 @@ TXT = {
     "check": ("🔄 Проверить платёж", "🔄 Check payment"),
     "support": ("💬 Поддержка", "💬 Support"),
     "close": ("❌ Закрыть", "❌ Close"),
+    "back": ("⬅️ Назад", "⬅️ Back"),
+    "link_btn": ("🔗 Привязать аккаунт", "🔗 Link account"),
+    "api_btn": ("🔑 API-ключи", "🔑 API keys"),
+    "promo_btn": ("🎁 Промокод", "🎁 Promo code"),
+    "linked": ("Привязано", "Linked"),
+    "tokens_today": ("Токенов сегодня", "Tokens today"),
+    "api_count": ("API-ключей", "API keys"),
+    "bonus_line": ("Бонус к пополнению", "Top-up bonus"),
+    "link_title": ("🔗 Привязка аккаунта", "🔗 Link account"),
+    "link_code": ("Код для сайта", "Code for the site"),
+    "link_ttl": ("Действует", "Valid for"),
+    "link_ttl_value": ("15 минут", "15 minutes"),
+    "link_site": ("Сайт", "Website"),
+    "link_hint": (
+        "Войди на сайте через Google или GitHub, открой меню аккаунта, выбери «Привязать» и введи этот код. "
+        "Баланс, usage и API-ключи станут общими. Если у аккаунта уже есть баланс — суммы сложатся, сайт предупредит об этом.",
+        "Sign in on the site with Google or GitHub, open the account menu, choose “Link” and enter this code. "
+        "Balance, usage and API keys become shared. If the account already has a balance, the amounts are summed and the site warns you first.",
+    ),
+    "api_title": ("🔑 API-ключи", "🔑 API keys"),
+    "api_empty": ("Ключей пока нет.", "No keys yet."),
+    "api_new": ("➕ Создать ключ", "➕ Create key"),
+    "api_revoke": ("🗑 Отозвать", "🗑 Revoke"),
+    "api_name_ask": (
+        "Пришли название нового ключа одним сообщением. Напиши /cancel, чтобы отменить.",
+        "Send a name for the new key in one message. Send /cancel to cancel.",
+    ),
+    "api_revoke_ask": (
+        "Пришли номер ключа, который нужно отозвать. Напиши /cancel, чтобы отменить.",
+        "Send the number of the key to revoke. Send /cancel to cancel.",
+    ),
+    "api_created": (
+        "Ключ создан. Скопируй его сейчас — больше он не покажется:\n\n`{0}`",
+        "Key created. Copy it now — it will not be shown again:\n\n`{0}`",
+    ),
+    "api_revoked": ("Ключ отозван.", "Key revoked."),
+    "api_limit": ("Лимит — 10 ключей. Отзови один из старых.", "Limit is 10 keys. Revoke an old one."),
+    "api_bad": ("Не понял. Пришли номер ключа из списка.", "Didn't get it. Send a key number from the list."),
+    "api_hint": (
+        "Ключи работают с публичным API: `https://kulsh.vercel.app/api/v1`. Секрет показывается один раз.",
+        "Keys work with the public API: `https://kulsh.vercel.app/api/v1`. The secret is shown once.",
+    ),
+    "promo_title": ("🎁 Промокод", "🎁 Promo code"),
+    "promo_ask": (
+        "Пришли промокод одним сообщением. Напиши /cancel, чтобы отменить.",
+        "Send the promo code in one message. Send /cancel to cancel.",
+    ),
+    "promo_ok": ("Промокод активирован. {0}", "Promo code activated. {0}"),
+    "promo_fail": ("Не вышло: {0}", "Could not activate: {0}"),
+    "promo_placeholder": ("Активация промокода", "Promo activation"),
     "paid": ("Зачислено: +{0:.2f} ₽", "Credited: +{0:.2f} ₽"),
     "nothing": ("Новых платежей не видно. Если донат был только что — подожди минуту и проверь ещё раз.",
                 "No new payments yet. If you just donated, wait a minute and check again."),
@@ -110,6 +171,8 @@ def balance_text(lang: str, user_id: int, nick: str) -> str:
     total = _money(get_total_topup("tg", user_id))
     code = topup_code("tg", user_id)
     pay_url = DONATIONALERTS_PAGE or DONATE_URL
+    bonus = cloud.get_bonus(cloud.resolve("tg", user_id)) if cloud.enabled() else 0
+    bonus_line = f"- **{t(lang, 'bonus_line')}:** +{bonus}%\n" if bonus else ""
     return (
         f"# {t(lang, 'balance_title')}\n\n"
         f"---\n\n"
@@ -119,6 +182,7 @@ def balance_text(lang: str, user_id: int, nick: str) -> str:
         f"**{t(lang, 'topup_section')}**\n\n"
         f"- **{t(lang, 'tag')}:** `{code}`\n"
         f"- **{t(lang, 'min')}:** {MIN_TOPUP_RUB:.0f} ₽\n"
+        f"{bonus_line}"
         f"- **[{t(lang, 'pay')}]({pay_url})**\n\n"
         f"{_GAP}\n\n"
         f"> {t(lang, 'code_hint')}\n\n"
@@ -129,11 +193,32 @@ def balance_text(lang: str, user_id: int, nick: str) -> str:
     )
 
 
+def _linked_services(lang: str, user_id: int) -> str:
+    if not cloud.enabled():
+        return "Telegram" if lang == "ru" else "Telegram"
+    acct = cloud.resolve("tg", user_id)
+    names: list[str] = []
+    for ident in cloud.account_ids(acct):
+        provider = ident.split(":", 1)[0]
+        label = PROVIDER_NAMES.get(provider, (provider, provider))[0 if lang == "ru" else 1]
+        if label not in names:
+            names.append(label)
+    return ", ".join(names) or ("—", "—")[0 if lang == "ru" else 1]
+
+
 def profile_text(lang: str, user_id: int, nick: str) -> str:
     del nick
     bal = _money(get_balance("tg", user_id))
     total = _money(get_total_topup("tg", user_id))
     count = get_topup_count("tg", user_id)
+    linked = _linked_services(lang, user_id)
+    usage_line = ""
+    keys_line = ""
+    if cloud.enabled():
+        acct = cloud.resolve("tg", user_id)
+        used = int(cloud.usage(acct).get("used") or 0)
+        usage_line = f"- **{t(lang, 'tokens_today')}:** {_tokens(used)} / {_tokens(100000)}\n"
+        keys_line = f"- **{t(lang, 'api_count')}:** {len(cloud.list_api_keys(acct))}\n"
     return (
         f"# {t(lang, 'profile_title')}\n\n"
         f"---\n\n"
@@ -141,10 +226,51 @@ def profile_text(lang: str, user_id: int, nick: str) -> str:
         f"|`{user_id}`|{bal} ₽|\n\n"
         f"{_GAP}\n\n"
         f"- **{t(lang, 'topped')}:** {total} ₽\n"
-        f"- **{t(lang, 'topups')}:** {count}\n\n"
+        f"- **{t(lang, 'topups')}:** {count}\n"
+        f"- **{t(lang, 'linked')}:** {linked}\n"
+        f"{usage_line}"
+        f"{keys_line}\n"
         f"---\n\n"
         f"{t(lang, 'profile_note')}"
     )
+
+
+def _tokens(value: int) -> str:
+    return f"{int(value):,}".replace(",", " ")
+
+
+def link_text(lang: str, code: str, nick: str = "") -> str:
+    site = "https://kulsh.vercel.app/chat"
+    return (
+        f"# {t(lang, 'link_title')}\n\n"
+        f"---\n\n"
+        f"- **{t(lang, 'link_code')}:** `{code}`\n"
+        f"- **{t(lang, 'link_ttl')}:** {t(lang, 'link_ttl_value')}\n"
+        f"- **{t(lang, 'link_site')}:** [kulsh.vercel.app]({site})\n\n"
+        f"{_GAP}\n\n"
+        f"> {t(lang, 'link_hint')}\n\n"
+        f"{_GAP}\n\n"
+        f"---\n\n"
+        f"{_legal(lang)}"
+    )
+
+
+def api_text(lang: str, user_id: int) -> str:
+    lines = [f"# {t(lang, 'api_title')}", "", "---", ""]
+    if not cloud.enabled():
+        lines.append(t(lang, "api_hint"))
+        return "\n".join(lines)
+    acct = cloud.resolve("tg", user_id)
+    keys = cloud.list_api_keys(acct)
+    if not keys:
+        lines.append(t(lang, "api_empty"))
+    else:
+        for i, key in enumerate(keys, 1):
+            name = _safe(str(key.get("name") or "Ключ"))
+            prefix = str(key.get("prefix") or "")
+            lines.append(f"- **{i}. {name}** — `{prefix}`")
+    lines += ["", "---", "", t(lang, "api_hint")]
+    return "\n".join(lines)
 
 
 def balance_keyboard(lang: str) -> InlineKeyboardMarkup:
@@ -153,12 +279,36 @@ def balance_keyboard(lang: str) -> InlineKeyboardMarkup:
         btn(t(lang, "check"), style=None, callback_data="menu:checkpay"),
         btn(t(lang, "support"), style=None, callback_data="menu:support"),
     )
+    kb.row(btn(t(lang, "promo_btn"), style=None, callback_data="menu:promo"))  # pyright: ignore[reportUnknownMemberType]
     kb.row(btn(t(lang, "close"), style="danger", callback_data="menu:close"))  # pyright: ignore[reportUnknownMemberType]
     return kb
 
 
 def profile_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
+    kb.row(  # pyright: ignore[reportUnknownMemberType]
+        btn(t(lang, "link_btn"), style=None, callback_data="menu:link"),
+        btn(t(lang, "api_btn"), style=None, callback_data="menu:api"),
+    )
+    kb.row(btn(t(lang, "promo_btn"), style=None, callback_data="menu:promo"))  # pyright: ignore[reportUnknownMemberType]
+    kb.row(btn(t(lang, "close"), style="danger", callback_data="menu:close"))  # pyright: ignore[reportUnknownMemberType]
+    return kb
+
+
+def link_keyboard(lang: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    kb.row(btn(t(lang, "back"), style=None, callback_data="menu:profile"))  # pyright: ignore[reportUnknownMemberType]
+    kb.row(btn(t(lang, "close"), style="danger", callback_data="menu:close"))  # pyright: ignore[reportUnknownMemberType]
+    return kb
+
+
+def api_keyboard(lang: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    kb.row(  # pyright: ignore[reportUnknownMemberType]
+        btn(t(lang, "api_new"), style=None, callback_data="menu:api_new"),
+        btn(t(lang, "api_revoke"), style=None, callback_data="menu:api_revoke"),
+    )
+    kb.row(btn(t(lang, "back"), style=None, callback_data="menu:profile"))  # pyright: ignore[reportUnknownMemberType]
     kb.row(btn(t(lang, "close"), style="danger", callback_data="menu:close"))  # pyright: ignore[reportUnknownMemberType]
     return kb
 
@@ -166,12 +316,20 @@ def profile_keyboard(lang: str) -> InlineKeyboardMarkup:
 def screen_text(screen: str, lang: str, user_id: int, nick: str) -> str:
     if screen == "profile":
         return profile_text(lang, user_id, nick)
+    if screen == "link":
+        return link_text(lang, cloud.create_link_code("tg", user_id, name=nick) if cloud.enabled() else "—", nick)
+    if screen == "api":
+        return api_text(lang, user_id)
     return balance_text(lang, user_id, nick)
 
 
 def screen_keyboard(screen: str, lang: str) -> InlineKeyboardMarkup:
     if screen == "profile":
         return profile_keyboard(lang)
+    if screen == "link":
+        return link_keyboard(lang)
+    if screen == "api":
+        return api_keyboard(lang)
     return balance_keyboard(lang)
 
 
@@ -314,3 +472,116 @@ async def relay_support_reply_tg(bot: Any, tid: int, text: str) -> None:
             await bot.send_message(SUPPORT_ADMIN_TG, t("ru", "support_relayed", tid))
     except Exception as e:
         logger.warning(f"support relay: {e}")
+
+
+# ============================================================
+# ACCOUNT: LINK / API KEYS / PROMO
+# ============================================================
+_CANCEL = {"/cancel", "отмена", "cancel", "/отмена", "отменить"}
+
+
+async def _ask_input(bot: Any, chat_id: int, user_id: int, text: str, kind: str) -> None:
+    try:
+        sent = await bot.send_message(chat_id, text)
+    except Exception as e:
+        logger.warning(f"account ask: {e}")
+        return
+    ask_id = int(getattr(sent, "message_id", 0) or 0)
+    ACCOUNT_WAITING[user_id] = {"kind": kind, "chat_id": chat_id, "ask_id": ask_id}
+    if ask_id:
+        config_children_msgs.setdefault((chat_id, user_id), []).append(ask_id)
+
+
+async def start_promo_tg(bot: Any, chat_id: int, user_id: int, lang: str) -> None:
+    await _ask_input(bot, chat_id, user_id, t(lang, "promo_ask"), "promo")
+
+
+async def start_api_new_tg(bot: Any, chat_id: int, user_id: int, lang: str) -> None:
+    await _ask_input(bot, chat_id, user_id, t(lang, "api_name_ask"), "api_name")
+
+
+async def start_api_revoke_tg(bot: Any, chat_id: int, user_id: int, lang: str) -> None:
+    await _ask_input(bot, chat_id, user_id, t(lang, "api_revoke_ask"), "api_revoke")
+
+
+async def _edit_plain(bot: Any, chat_id: int, message_id: int, text: str) -> None:
+    if await edit_rich_message(chat_id, message_id, text):
+        return
+    try:
+        await bot.edit_message_text(
+            markdown_like_to_telegram_html(text), chat_id=chat_id, message_id=message_id,
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.debug(f"account edit: {e}")
+
+
+async def _wipe(bot: Any, chat_id: int, *ids: int | None) -> None:
+    for mid in ids:
+        if not mid:
+            continue
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+
+
+async def handle_account_input(bot: Any, message: Any, lang: str) -> bool:
+    """Consumes the user's answer for promo / API key flows. True if handled."""
+    user = getattr(message, "from_user", None)
+    if user is None:
+        return False
+    user_id = user.id
+    state = ACCOUNT_WAITING.get(user_id)
+    if not state:
+        return False
+    chat_id = message.chat.id
+    text = (getattr(message, "text", None) or "").strip()
+    ask_id = state.get("ask_id")
+    if text.lower() in _CANCEL:
+        ACCOUNT_WAITING.pop(user_id, None)
+        await _wipe(bot, chat_id, ask_id, message.message_id)
+        return True
+    kind = str(state.get("kind") or "")
+    ACCOUNT_WAITING.pop(user_id, None)
+    await _wipe(bot, chat_id, message.message_id)
+    if kind == "promo":
+        status, detail = promo.redeem("tg", user_id, text)
+        body = t(lang, "promo_ok", detail) if status.startswith("ok") else t(lang, "promo_fail", detail)
+        if ask_id:
+            await _edit_plain(bot, chat_id, ask_id, f"# {t(lang, 'promo_title')}\n\n---\n\n{body}")
+        return True
+    if kind == "api_name":
+        if not cloud.enabled():
+            if ask_id:
+                await _edit_plain(bot, chat_id, ask_id, f"# {t(lang, 'api_title')}\n\n---\n\n{t(lang, 'api_hint')}")
+            return True
+        acct = cloud.resolve("tg", user_id)
+        created = cloud.create_api_key(acct, text or "Ключ")
+        if not created or created.get("error"):
+            body = t(lang, "api_limit") if (created or {}).get("error") == "limit" else t(lang, "api_hint")
+            if ask_id:
+                await _edit_plain(bot, chat_id, ask_id, f"# {t(lang, 'api_title')}\n\n---\n\n{body}")
+            return True
+        if ask_id:
+            await _edit_plain(
+                bot, chat_id, ask_id,
+                f"# {t(lang, 'api_title')}\n\n---\n\n{t(lang, 'api_created', created.get('secret'))}",
+            )
+        return True
+    if kind == "api_revoke":
+        acct = cloud.resolve("tg", user_id)
+        keys = cloud.list_api_keys(acct)
+        try:
+            idx = int(text) - 1
+        except ValueError:
+            idx = -1
+        if 0 <= idx < len(keys):
+            cloud.revoke_api_key(acct, str(keys[idx].get("id")))
+            body = t(lang, "api_revoked")
+        else:
+            body = t(lang, "api_bad")
+        if ask_id:
+            await _edit_plain(bot, chat_id, ask_id, f"# {t(lang, 'api_title')}\n\n---\n\n{body}")
+        return True
+    return False

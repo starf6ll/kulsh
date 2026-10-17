@@ -253,6 +253,17 @@ def _smoke_check() -> None:  # pyright: ignore[reportUnusedFunction]
 async def main() -> None:
     register()
 
+    # Переносим старые локальные балансы в общую базу сайта (один раз).
+    try:
+        from src import cloud
+        if cloud.enabled():
+            cloud.migrate_legacy(billing.balances)
+            logger.info("☁️ Общее хранилище аккаунтов подключено")
+        else:
+            logger.warning("☁️ Общее хранилище не настроено (KV_REST_API_URL/TOKEN) — баланс локальный")
+    except Exception as e:
+        logger.warning(f"cloud init: {e}")
+
     if callable(getattr(loops, "random_post_loop", None)):
         asyncio.create_task(loops.random_post_loop())
     else:

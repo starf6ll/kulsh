@@ -20,6 +20,7 @@ from src.util import (
     JsonDict,
     logger,
 )
+from src import cloud
 
 BALANCES_FILE = 'balances.json'
 DONATIONS_FILE = 'da_processed.json'
@@ -75,16 +76,22 @@ def _bkey(platform: str, user_id: int) -> str:
 
 
 def get_balance(platform: str, user_id: int) -> float:
+    if cloud.enabled():
+        return round(cloud.get_balance_kop(cloud.resolve(platform, user_id)) / 100.0, 2)
     entry = balances.get(_bkey(platform, user_id)) or {}
     return round(float(entry.get("balance") or 0.0), 2)
 
 
 def get_total_topup(platform: str, user_id: int) -> float:
+    if cloud.enabled():
+        return round(cloud.get_total_topup_kop(cloud.resolve(platform, user_id)) / 100.0, 2)
     entry = balances.get(_bkey(platform, user_id)) or {}
     return round(float(entry.get("total_topup") or 0.0), 2)
 
 
 def get_topup_count(platform: str, user_id: int) -> int:
+    if cloud.enabled():
+        return cloud.get_topup_count(cloud.resolve(platform, user_id))
     entry = balances.get(_bkey(platform, user_id)) or {}
     history = entry.get("history")
     if not isinstance(history, list):
@@ -94,6 +101,11 @@ def get_topup_count(platform: str, user_id: int) -> int:
 
 def add_balance(platform: str, user_id: int, amount_rub: float, note: str = "") -> float:
     if amount_rub <= 0:
+        return get_balance(platform, user_id)
+    if cloud.enabled():
+        acct = cloud.resolve(platform, user_id)
+        cloud.add_balance_kop(acct, int(round(amount_rub * 100)), topup=True)
+        logger.info(f"💰 {platform}_{user_id} (+{amount_rub:.2f} ₽, {note or 'topup'})")
         return get_balance(platform, user_id)
     key = _bkey(platform, user_id)
     entry = balances.setdefault(key, {"balance": 0.0, "total_topup": 0.0, "history": []})
@@ -110,6 +122,12 @@ def add_balance(platform: str, user_id: int, amount_rub: float, note: str = "") 
 def charge_balance(platform: str, user_id: int, amount_rub: float, note: str = "") -> bool:
     if amount_rub <= 0:
         return True
+    if cloud.enabled():
+        acct = cloud.resolve(platform, user_id)
+        ok = cloud.charge_kop(acct, int(round(amount_rub * 100)))
+        if ok:
+            logger.info(f"💳 {platform}_{user_id} (-{amount_rub:.4f} ₽, {note or 'charge'})")
+        return ok
     key = _bkey(platform, user_id)
     entry = balances.setdefault(key, {"balance": 0.0, "total_topup": 0.0, "history": []})
     balance = float(entry.get("balance") or 0.0)
@@ -124,8 +142,40 @@ def charge_balance(platform: str, user_id: int, amount_rub: float, note: str = "
     return True
 
 
+def add_credit(platform: str, user_id: int, amount_rub: float, note: str = "") -> float:
+    """Promo credit: adds money without counting it as a top-up."""
+    if amount_rub <= 0:
+        return get_balance(platform, user_id)
+    if cloud.enabled():
+        acct = cloud.resolve(platform, user_id)
+        cloud.add_balance_kop(acct, int(round(amount_rub * 100)), topup=False)
+        return get_balance(platform, user_id)
+    key = _bkey(platform, user_id)
+    entry = balances.setdefault(key, {"balance": 0.0, "total_topup": 0.0, "history": []})
+    entry["balance"] = round(float(entry.get("balance") or 0.0) + amount_rub, 2)
+    history = entry.setdefault("history", [])
+    if isinstance(history, list):
+        history.append({"ts": int(time.time()), "amount": round(amount_rub, 2), "note": note})
+        del history[:-50]
+    _save(BALANCES_FILE, balances)
+    return entry["balance"]
+
+
 def has_balance_for_paid(platform: str, user_id: int) -> bool:
     return get_balance(platform, user_id) > 0.005
+
+
+def account_id(platform: str, user_id: int) -> str:
+    """Shared account id used by the website and both bots."""
+    return cloud.resolve(platform, user_id)
+
+
+def topup_bonus(platform: str, user_id: int) -> int:
+    return cloud.get_bonus(cloud.resolve(platform, user_id))
+
+
+def set_topup_bonus(platform: str, user_id: int, percent: int) -> None:
+    cloud.set_bonus(cloud.resolve(platform, user_id), percent)
 
 
 def topup_code(platform: str, user_id: int) -> str:
@@ -237,10 +287,19 @@ async def poll_donations_once() -> list[tuple[str, int, float, str]]:
         if amount <= 0:
             continue
 
-        # Код содержит числовой id. Пробуем оба платформенных ключа.
+        # Код содержит числовой id. Сначала смотрим, к какому аккаунту он привязан.
         platform = "tg"
-        if user_id >= 10**15 or balances.get(_bkey("ds", user_id)):
+        if cloud.enabled():
+            if cloud.identity_exists("tg", user_id):
+                platform = "tg"
+            elif cloud.identity_exists("ds", user_id):
+                platform = "ds"
+        elif user_id >= 10**15 or balances.get(_bkey("ds", user_id)):
             platform = "ds"
+        bonus = cloud.consume_bonus(cloud.resolve(platform, user_id)) if cloud.enabled() else 0
+        if bonus > 0:
+            amount = round(amount * (1 + bonus / 100.0), 2)
+            logger.info(f"🎁 бонус +{bonus}% к пополнению {platform}_{user_id}")
         add_balance(platform, user_id, amount, note=f"donationalerts:{donation_id}")
         credited.append((platform, user_id, amount, str(item.get("username") or "")))
         if donation_id:

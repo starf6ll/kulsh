@@ -514,34 +514,44 @@ async def handle_menu_callback(call: types.CallbackQuery) -> None:
     lang = cfg.get("language", "ru")
     is_private = (msg.chat.type == 'private')
 
-    if action in ("balance", "profile", "checkpay", "support"):
+    if action in ("balance", "profile", "link", "api", "checkpay", "support", "promo",
+                  "api_new", "api_revoke"):
         nick = call.from_user.full_name or call.from_user.username or str(user_id)
-        if action == "balance":
+        if action in ("balance", "profile", "link", "api"):
             await tg_bot.answer_callback_query(cb_id(call))
             origin = (ui_flow_by_msg.get(msg.message_id) or {}).get("origin_id")
             if is_private and await balance_ui.edit_screen_tg(
-                tg_bot, chat_id, msg.message_id, "balance", lang, user_id, nick,
+                tg_bot, chat_id, msg.message_id, action, lang, user_id, nick,
             ):
                 return
-            await balance_ui.send_balance_menu_tg(
-                tg_bot, chat_id, user_id, lang, nick, origin_id=origin if isinstance(origin, int) else None,
-            )
-        elif action == "profile":
-            await tg_bot.answer_callback_query(cb_id(call))
-            origin = (ui_flow_by_msg.get(msg.message_id) or {}).get("origin_id")
-            if is_private and await balance_ui.edit_screen_tg(
-                tg_bot, chat_id, msg.message_id, "profile", lang, user_id, nick,
-            ):
-                return
-            await balance_ui.send_profile_tg(
-                tg_bot, chat_id, user_id, lang, nick, origin_id=origin if isinstance(origin, int) else None,
-            )
+            if action == "balance":
+                await balance_ui.send_balance_menu_tg(
+                    tg_bot, chat_id, user_id, lang, nick, origin_id=origin if isinstance(origin, int) else None,
+                )
+            elif action == "profile":
+                await balance_ui.send_profile_tg(
+                    tg_bot, chat_id, user_id, lang, nick, origin_id=origin if isinstance(origin, int) else None,
+                )
+            else:
+                await balance_ui.send_screen_tg(
+                    tg_bot, chat_id, user_id, lang, nick, screen=action,
+                    origin_id=origin if isinstance(origin, int) else None,
+                )
         elif action == "checkpay":
             await tg_bot.answer_callback_query(cb_id(call), tr(lang, "checking"))
             await balance_ui.check_payment_tg(tg_bot, chat_id, user_id, lang)
         elif action == "support":
             await tg_bot.answer_callback_query(cb_id(call))
             await balance_ui.start_support_tg(tg_bot, chat_id, user_id, lang)
+        elif action == "promo":
+            await tg_bot.answer_callback_query(cb_id(call))
+            await balance_ui.start_promo_tg(tg_bot, chat_id, user_id, lang)
+        elif action == "api_new":
+            await tg_bot.answer_callback_query(cb_id(call))
+            await balance_ui.start_api_new_tg(tg_bot, chat_id, user_id, lang)
+        elif action == "api_revoke":
+            await tg_bot.answer_callback_query(cb_id(call))
+            await balance_ui.start_api_revoke_tg(tg_bot, chat_id, user_id, lang)
         return
 
     if action == "close":

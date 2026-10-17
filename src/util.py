@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.50.0"
+BOT_VERSION: str = "2.51.0"
 
 MSK = timezone(timedelta(hours=3))
 
