@@ -46,7 +46,7 @@ TXT = {
     "min": ("Минимальная сумма", "Minimum amount"),
     "pay": ("Ссылка на оплату", "Payment link"),
     "code_hint": (
-        "Вставь код в поле «Сообщение» при оплате. Без него платёж не привяжется к аккаунту.",
+        "Вставь тег в поле «Сообщение» при оплате. Без него платёж не привяжется к аккаунту.",
         "Put the code into the donation message. Without it the payment will not be linked to the account.",
     ),
     "auto_note": (
