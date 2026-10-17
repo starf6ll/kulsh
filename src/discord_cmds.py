@@ -1436,8 +1436,7 @@ def _ds_profile_embed(lang: str, user_id: int, nick: str) -> discord.Embed:
             f"**Баланс:** {bal} ₽\n"
             f"**Всего пополнено:** {total} ₽\n"
             f"**Пополнений:** {count}\n\n"
-            f"*Пополнение и история платежей — в разделе баланса.*\n\n"
-            f"[Пользовательское соглашение]({TERMS_URL}) · [Политика конфиденциальности]({PRIVACY_URL})"
+            f"*Пополнение и история платежей — в разделе баланса.*"
         )
         title = "👤 Профиль"
     else:
@@ -1447,8 +1446,7 @@ def _ds_profile_embed(lang: str, user_id: int, nick: str) -> discord.Embed:
             f"**Balance:** {bal} ₽\n"
             f"**Total topped up:** {total} ₽\n"
             f"**Top-ups:** {count}\n\n"
-            f"*Top-ups and payment history live in the balance section.*\n\n"
-            f"[Terms of Service]({TERMS_URL}) · [Privacy Policy]({PRIVACY_URL})"
+            f"*Top-ups and payment history live in the balance section.*"
         )
         title = "👤 Profile"
     embed = discord.Embed(title=title, description=desc, color=0xA75FFF)
@@ -1499,12 +1497,6 @@ class DsProfileView(discord.ui.View):
         )
         back.callback = self._on_back
         self.add_item(back)
-        support = discord.ui.Button(
-            label=("💬 Поддержка" if lang == "ru" else "💬 Support"),
-            style=discord.ButtonStyle.secondary, row=1,
-        )
-        support.callback = self._on_support
-        self.add_item(support)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -1521,9 +1513,6 @@ class DsProfileView(discord.ui.View):
             embed=_ds_balance_embed(self.lang, self.user_id, self.nick),
             view=DsBalanceView(self.user_id, self.lang, self.nick),
         )
-
-    async def _on_support(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(SupportModal())
 
 
 class DsBalanceView(discord.ui.View):

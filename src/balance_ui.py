@@ -141,9 +141,7 @@ def profile_text(lang: str, user_id: int, nick: str) -> str:
         f"|`{user_id}`|{bal} ₽|\n\n"
         f"- **{t(lang, 'topup_col')}:** {total} ₽\n"
         f"- **{t(lang, 'topups')}:** {count}\n\n"
-        f"> {t(lang, 'profile_note')}\n\n"
-        f"---\n\n"
-        f"{_legal(lang)}"
+        f"> {t(lang, 'profile_note')}"
     )
 
 
@@ -166,10 +164,7 @@ def profile_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     pay_url = DONATIONALERTS_PAGE or DONATE_URL
     kb.row(btn(t(lang, "topup_btn"), style="success", url=pay_url))  # pyright: ignore[reportUnknownMemberType]
-    kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(t(lang, "back"), style="primary", callback_data="menu:balance"),
-        btn(t(lang, "support"), style=None, callback_data="menu:support"),
-    )
+    kb.row(btn(t(lang, "back"), style="primary", callback_data="menu:balance"))  # pyright: ignore[reportUnknownMemberType]
     return kb
 
 
