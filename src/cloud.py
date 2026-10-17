@@ -137,6 +137,12 @@ def _cache_get(key: str) -> Any | None:
     return value
 
 
+def _cache_peek(key: str) -> Any | None:
+    """Последнее известное значение без учёта TTL — на случай короткого сбоя Redis."""
+    hit = _cache.get(key)
+    return hit[0] if hit else None
+
+
 def _cache_set(key: str, value: Any) -> None:
     _cache[key] = (value, time.time())
 
@@ -351,7 +357,11 @@ def get_balance_kop(acct: str) -> int:
     cached = _cache_get(f"bal:{acct}")
     if cached is not None:
         return int(cached)
-    value = _int(_cmd("GET", f"{BALANCE_PREFIX}{acct}:balance"))
+    raw = _cmd("GET", f"{BALANCE_PREFIX}{acct}:balance")
+    if raw is None:
+        stale = _cache_peek(f"bal:{acct}")
+        return int(stale) if stale is not None else 0
+    value = _int(raw)
     _cache_set(f"bal:{acct}", value)
     return value
 
@@ -389,7 +399,11 @@ def get_total_topup_kop(acct: str) -> int:
     cached = _cache_get(f"topup:{acct}")
     if cached is not None:
         return int(cached)
-    value = _int(_cmd("GET", f"{BALANCE_PREFIX}{acct}:topup"))
+    raw = _cmd("GET", f"{BALANCE_PREFIX}{acct}:topup")
+    if raw is None:
+        stale = _cache_peek(f"topup:{acct}")
+        return int(stale) if stale is not None else 0
+    value = _int(raw)
     _cache_set(f"topup:{acct}", value)
     return value
 
