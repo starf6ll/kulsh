@@ -36,6 +36,22 @@ TEXTS: dict[str, tuple[str, str]] = {
     "cfg_choose_mode":         ("🧩 Выбор режима общения", "🧩 Communication mode"),
     "cfg_current":             ("Текущая", "Current"),
     "cfg_auto_hint":           ("перебор всех моделей", "try all models"),
+    "cfg_pick_company":        ("Выбери компанию — модели откроются следующим шагом.", "Pick a company — its models open next."),
+    "cfg_pick_model":          ("Выбери модель этой компании.", "Pick a model from this company."),
+    "cfg_company":             ("Компания", "Company"),
+    "cfg_section_main":        ("Основное", "General"),
+    "cfg_section_content":     ("Контент", "Content"),
+    "cfg_section_chat":        ("Чат", "Chat"),
+    "cfg_section_other":       ("Прочее", "Other"),
+    "checking":                ("Проверяю…", "Checking…"),
+    "balance_low": (
+        "💳 не хватает средств\n\n"
+        "на балансе {0} ₽ — на {1} этого мало.\n"
+        "пополни через /balance или выбери бесплатную модель в настройках.",
+        "💳 not enough funds\n\n"
+        "your balance is {0} ₽ — not enough for {1}.\n"
+        "top up with /balance or pick a free model in settings.",
+    ),
     "cfg_prompt_label":        ("📝 Кастомный промпт", "📝 Custom prompt"),
     "cfg_prompt_default":      ("стандартный", "default"),
     "cfg_credits_label":       ("💎 Кредиты", "💎 Credits"),
@@ -114,6 +130,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "btn_settings":            ("⚙️ Настройки", "⚙️ Settings"),
     "btn_commands":            ("📖 Команды", "📖 Commands"),
     "btn_menu":                ("📖 Меню", "📖 Menu"),
+    "btn_balance":             ("💳 Баланс", "💳 Balance"),
     "btn_donate":              ("💎 Донат", "💎 Donate"),
     "btn_github":              ("🔗 GitHub", "🔗 GitHub"),
     "btn_close":               ("❌ Закрыть", "❌ Close"),

@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.47.0
+# Kulsh GPT | v2.48.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -611,12 +611,26 @@ def _in_asset_dir(path: str) -> bool:
 
 
 def _host_allowed(url: str) -> bool:
+    """Разрешаем любой публичный http(s)-хост, но блокируем локальные адреса (SSRF)."""
+    import ipaddress
+    import socket
     from urllib.parse import urlparse
     try:
-        host = (urlparse(url).hostname or "").lower()
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = parsed.hostname
+        if not host:
+            return False
+        infos = socket.getaddrinfo(host, None)
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+                return False
+        return True
     except Exception:
         return False
-    return any(host == h or host.endswith("." + h) for h in ASSET_HOST_ALLOW)
 
 
 def _download_to_asset(url: str, filename: str | None = None) -> str | None:
@@ -628,7 +642,16 @@ def _download_to_asset(url: str, filename: str | None = None) -> str | None:
     name = re.sub(r'[^A-Za-z0-9._-]', '_', name)
     dest = os.path.join(base, name)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 KulshBot"})
+        from urllib.parse import urlparse
+        origin = urlparse(url)
+        referer = f"{origin.scheme}://{origin.netloc}/"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 KulshBot"),
+            "Accept": "image/avif,image/webp,image/apng,image/*,font/*,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+            "Referer": referer,
+        })
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = resp.read(MAX_ASSET_BYTES + 1)
         if len(data) > MAX_ASSET_BYTES:

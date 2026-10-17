@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.47.0
+# Kulsh GPT | v2.48.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -537,6 +537,7 @@ async def get_looksmaxxing_data(
             "STRICT tier names only, no synonyms, no invented variants."
         ),
         chat_id=chat_id, user_id=user_id, platform=platform,
+        model_override="glm-5.3-flash", no_fallback=True,
     )
     try:
         data = json_dict(json.loads(clean_json_text(raw)))
@@ -581,6 +582,7 @@ async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, A
             "Never use 'High Normie', 'Low Tier Normie', 'Subhuman', 'Animal', etc."
         ),
         image_bytes_list=[p1, p2], image_mime_list=["image/jpeg", "image/jpeg"],
+        model_override="glm-5.3-flash", no_fallback=True,
     )
     try:
         return json_dict(json.loads(clean_json_text(raw)))
@@ -1006,6 +1008,7 @@ async def get_femboy_data(photo_bytes: bytes, include_advice: bool, lang: str = 
             "You are a femboy-ness AI. Answer ONLY with JSON. "
             "STRICT FMB tier names only, no synonyms, no invented variants."
         ),
+        model_override="glm-5.3-flash", no_fallback=True,
     )
     try:
         return json_dict(json.loads(clean_json_text(raw)))
@@ -1038,6 +1041,7 @@ async def get_femboy_battle_data(p1: bytes, p2: bytes, lang: str = "ru") -> dict
             "CHAD, SIGMA, NORMIE, SOFTBOY, SOFTGIRL, CUTIE, FEMBOY, FEMGIRL, TWINK, ULTRAFEM, GODDESS."
         ),
         image_bytes_list=[p1, p2], image_mime_list=["image/jpeg", "image/jpeg"],
+        model_override="glm-5.3-flash", no_fallback=True,
     )
     try:
         return json_dict(json.loads(clean_json_text(raw)))

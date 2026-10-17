@@ -13,7 +13,7 @@ from discord import app_commands
 from telebot import types as types
 from telebot.async_telebot import AsyncTeleBot
 
-from src import discord_cmds, discord_msg, loops, media, rich, telegram
+from src import discord_cmds, discord_msg, loops, media, rich, telegram, billing
 from src.util import (
     AI_KEYS,
     NEUTRALBEATS_API_KEY,
@@ -75,6 +75,9 @@ def register_telegram() -> None:
     deco(getattr(tg_bot, "message_handler"))(commands=["donate"])(telegram.handle_donate)
     deco(getattr(tg_bot, "message_handler"))(commands=["donate_stars"])(telegram.handle_donate_stars)
     deco(getattr(tg_bot, "message_handler"))(commands=["credits"])(telegram.handle_credits)
+    deco(getattr(tg_bot, "message_handler"))(commands=["balance"])(telegram.handle_balance)
+    deco(getattr(tg_bot, "message_handler"))(commands=["profile"])(telegram.handle_profile)
+    deco(getattr(tg_bot, "message_handler"))(commands=["support"])(telegram.handle_support)
     deco(getattr(tg_bot, "message_handler"))(commands=["togglepremiumfunctionsadmin"])(telegram.handle_toggle_premium)
     deco(getattr(tg_bot, "pre_checkout_query_handler"))(func=_always_true)(telegram.handle_pre_checkout)
     deco(getattr(tg_bot, "message_handler"))(content_types=["successful_payment"])(telegram.handle_successful_payment)
@@ -90,6 +93,9 @@ def register_discord() -> None:
     tree.command(name="status", description="Bot status / Состояние бота")(discord_cmds.ds_slash_status)
     tree.command(name="donate", description="Support the project / Поддержать проект")(discord_cmds.ds_slash_donate)
     tree.command(name="credits", description="Credits balance / Баланс кредитов")(discord_cmds.ds_slash_credits)
+    tree.command(name="balance", description="Balance and top-up / Баланс и пополнение")(discord_cmds.ds_slash_balance)
+    tree.command(name="profile", description="Profile / Профиль")(discord_cmds.ds_slash_profile)
+    tree.command(name="support", description="Contact support / Поддержка")(discord_cmds.ds_slash_support)
     tree.command(name="config", description="Channel settings / Настройки канала")(discord_cmds.ds_slash_config)
     tree.command(name="logs", description="Server logs (admins) / Логи сервера (админам)")(discord_cmds.ds_slash_logs)
     tree.command(name="groupinfo", description="Server info / Инфо о сервере")(discord_cmds.ds_slash_groupinfo)
@@ -255,8 +261,37 @@ async def main() -> None:
             raise
 
     async def start_telegram() -> None:
+        ru_commands = [
+            types.BotCommand("start", "🚀 Запустить Кульша"),
+            types.BotCommand("menu", "📖 Открыть меню"),
+            types.BotCommand("balance", "💳 Баланс и пополнение"),
+            types.BotCommand("profile", "👤 Профиль и статистика"),
+            types.BotCommand("support", "💬 Написать в поддержку"),
+            types.BotCommand("help", "📚 Список всех команд"),
+            types.BotCommand("status", "🟢 Состояние бота"),
+            types.BotCommand("credits", "💎 Дневные кредиты"),
+            types.BotCommand("donate", "❤️ Поддержать проект"),
+        ]
+        en_commands = [
+            types.BotCommand("start", "🚀 Start Kulsh"),
+            types.BotCommand("menu", "📖 Open the menu"),
+            types.BotCommand("balance", "💳 Balance and top-up"),
+            types.BotCommand("profile", "👤 Profile and stats"),
+            types.BotCommand("support", "💬 Contact support"),
+            types.BotCommand("help", "📚 All commands"),
+            types.BotCommand("status", "🟢 Bot status"),
+            types.BotCommand("credits", "💎 Daily credits"),
+            types.BotCommand("donate", "❤️ Support the project"),
+        ]
+        try:
+            await tg_bot.set_my_commands(ru_commands)
+            await tg_bot.set_my_commands(en_commands, language_code="en")
+            logger.info("Список команд Telegram обновлён")
+        except Exception as e:
+            logger.warning(f"set_my_commands: {e}")
         await tg_bot.polling(non_stop=True)
 
+    asyncio.create_task(billing.donation_poll_loop())
     await asyncio.gather(start_discord(), start_telegram())
 
 

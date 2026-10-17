@@ -16,6 +16,7 @@ from telebot import types as types
 from telebot import util as util
 from telebot.types import ForceReply, InlineKeyboardMarkup, InputFile
 
+from src import balance_ui
 from src.loops import send_donation_alert
 from src.ai import (
     extract_search_marker,
@@ -321,6 +322,16 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(cb_id(call))
         return
 
+    if action == "model_co":
+        try:
+            company_index = int(parts[2]) if len(parts) > 2 else 0
+        except ValueError:
+            company_index = 0
+        await edit_or_send(call, model_picker_text("tg", chat_id, user_id, company_index),
+                            build_model_keyboard("tg", chat_id, user_id, company_index))
+        await tg_bot.answer_callback_query(cb_id(call))
+        return
+
     if action in ("model_back", "sub_back"):
         await edit_or_send(call, config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
@@ -467,6 +478,30 @@ async def handle_menu_callback(call: types.CallbackQuery) -> None:
     lang = cfg.get("language", "ru")
     is_private = (msg.chat.type == 'private')
 
+    if action in ("balance", "profile", "checkpay", "support"):
+        nick = call.from_user.full_name or call.from_user.username or str(user_id)
+        if action == "balance":
+            await tg_bot.answer_callback_query(cb_id(call))
+            if is_private and await balance_ui.edit_screen_tg(
+                tg_bot, chat_id, msg.message_id, "balance", lang, user_id, nick,
+            ):
+                return
+            await balance_ui.send_balance_menu_tg(tg_bot, chat_id, user_id, lang, nick)
+        elif action == "profile":
+            await tg_bot.answer_callback_query(cb_id(call))
+            if is_private and await balance_ui.edit_screen_tg(
+                tg_bot, chat_id, msg.message_id, "profile", lang, user_id, nick,
+            ):
+                return
+            await balance_ui.send_profile_tg(tg_bot, chat_id, user_id, lang, nick)
+        elif action == "checkpay":
+            await tg_bot.answer_callback_query(cb_id(call), tr(lang, "checking"))
+            await balance_ui.check_payment_tg(tg_bot, chat_id, user_id, lang)
+        elif action == "support":
+            await tg_bot.answer_callback_query(cb_id(call))
+            await balance_ui.start_support_tg(tg_bot, chat_id, user_id, lang)
+        return
+
     if action == "close":
         try:
             await tg_bot.delete_message(chat_id, msg.message_id)
@@ -541,6 +576,10 @@ async def handle_start(message: types.Message) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     is_private = (message.chat.type == 'private')
+    if args in ("balance", "profile") and is_private:
+        nick = message.from_user.full_name or message.from_user.username or str(user_id)
+        await balance_ui.send_screen_tg(tg_bot, chat_id, user_id, lang, nick, screen=args)
+        return
     start_text = build_start_text(lang)
     kb = build_start_keyboard(lang, is_private=is_private)
     await send_formatted(chat_id, start_text, reply_to=message.message_id, reply_markup=kb)
@@ -632,6 +671,44 @@ async def handle_credits(message: types.Message) -> None:
     lang = cfg.get("language", "ru")
     creds = get_user_credits("tg", message.from_user.id)
     await reply_tg_html(message, tr(lang, "credits_balance", creds, DAILY_CREDITS))
+
+
+async def handle_balance(message: types.Message) -> None:
+    if message.from_user is None:
+        return
+    cfg = get_user_config("tg", message.chat.id, message.from_user.id)
+    lang = cfg.get("language", "ru")
+    nick = message.from_user.full_name or message.from_user.username or str(message.from_user.id)
+    await balance_ui.send_balance_menu_tg(
+        tg_bot, message.chat.id, message.from_user.id, lang, nick,
+        reply_to=message.message_id,
+    )
+
+
+async def handle_profile(message: types.Message) -> None:
+    if message.from_user is None:
+        return
+    cfg = get_user_config("tg", message.chat.id, message.from_user.id)
+    lang = cfg.get("language", "ru")
+    nick = message.from_user.full_name or message.from_user.username or str(message.from_user.id)
+    await balance_ui.send_profile_tg(
+        tg_bot, message.chat.id, message.from_user.id, lang, nick,
+        reply_to=message.message_id,
+    )
+
+
+async def handle_support(message: types.Message) -> None:
+    if message.from_user is None:
+        return
+    cfg = get_user_config("tg", message.chat.id, message.from_user.id)
+    lang = cfg.get("language", "ru")
+    args = (util.extract_arguments(message.text or "") or "").strip()
+    if args:
+        await balance_ui.submit_support_tg(
+            tg_bot, message.from_user.id, message.chat.id, args, lang,
+        )
+    else:
+        await balance_ui.start_support_tg(tg_bot, message.chat.id, message.from_user.id, lang)
 
 
 async def handle_status(message: types.Message) -> None:

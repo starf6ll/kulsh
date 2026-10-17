@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.47.0
+# Kulsh GPT | v2.48.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -35,6 +35,12 @@ from src.looks import (
     get_looksmaxxing_data,
 )
 from src.telegram import should_random_reply
+from src.billing import (
+    SUPPORT_ADMIN_DS,
+    append_ticket_message,
+    get_ticket,
+    ticket_by_admin_message,
+)
 from src.util import (
     JsonDict,
     perform_safe_git_update,
@@ -70,8 +76,15 @@ from src.util import (
     is_looksmaxxing_command,
     last_search_sources,
     register_ds_channel,
+    process_ai_response,
+    scrub_stray_markers,
+    strip_chat_emojis,
+    note_chat_participant,
 )
 from src import discord_cmds as dcmd
+
+
+_scanned_guilds: set[int] = set()
 
 
 async def _is_addressed_from_bot_ds(message: discord.Message) -> bool:
@@ -106,6 +119,43 @@ async def on_message(message: discord.Message) -> None:
     chat_id = message.channel.id
     user_id = message.author.id
     register_ds_channel(chat_id, guild.id if guild else None)
+
+    admin_ds = SUPPORT_ADMIN_DS or (AUTHORIZED_UPDATERS[0] if AUTHORIZED_UPDATERS else 0)
+    if is_dm and admin_ds and user_id == admin_ds and message.reference is not None:
+        tid = ticket_by_admin_message("ds", message.reference.message_id)
+        if tid:
+            ticket = get_ticket(tid) or {}
+            append_ticket_message(tid, "support", message.content)
+            if str(ticket.get("platform")) == "ds":
+                target_id = int(ticket.get("user_id") or 0)
+                try:
+                    target = dcmd.ds_bot.get_user(target_id) or await dcmd.ds_bot.fetch_user(target_id)
+                    await target.send(
+                        f"💬 Пришёл ответ от поддержки по обращению №{tid}:\n\n{message.content}"
+                    )
+                    await message.reply(f"Ответ отправлен (обращение №{tid}).")
+                except Exception as e:
+                    await message.reply(f"Не смог отправить: {e}")
+            return
+
+    note_chat_participant(
+        "ds", chat_id,
+        getattr(message.author, "name", ""),
+        getattr(message.author, "global_name", ""),
+        getattr(message.author, "display_name", ""),
+    )
+    if guild is not None and guild.id not in _scanned_guilds:
+        _scanned_guilds.add(guild.id)
+        try:
+            for _m in guild.members:
+                note_chat_participant(
+                    "ds", chat_id,
+                    getattr(_m, "name", ""),
+                    getattr(_m, "global_name", ""),
+                    getattr(_m, "display_name", ""),
+                )
+        except Exception:
+            pass
     content_lower = message.content.lower()
     display_name = str(getattr(message.author, "display_name", message.author.name))
     username = message.author.name
@@ -196,7 +246,23 @@ async def on_message(message: discord.Message) -> None:
             f"Ответь сам, живо и по делу. Ссылки вставлять не обязан, они у тебя в контексте."
         )
         answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds")
-        await message.reply((answer or tr(lang, "search_nothing"))[:1900])
+        segments, _markers = process_ai_response(
+            answer or tr(lang, "search_nothing"),
+            separate_enabled=cfg.get("separate_enabled", True),
+        )
+        for i, seg in enumerate(segments):
+            seg = scrub_stray_markers(seg)
+            if cfg.get("communication_mode", "kent") == "kent":
+                seg = strip_chat_emojis(seg)
+            if not seg:
+                continue
+            try:
+                if i == 0:
+                    await message.reply(seg[:1900])
+                else:
+                    await message.channel.send(seg[:1900])
+            except Exception as e:
+                logger.warning(f"ds search send: {e}")
         return
 
     m = re.match(r'(?i)^(?:кульш\s+)?(?:график|chart|инфографика|диаграмма)\s+(.+)$', message.content.strip(), re.DOTALL)

@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.47.0
+# Kulsh GPT | v2.48.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -14,6 +14,8 @@ from telebot import types as types
 from telebot.types import InputFile
 
 from src.ai import ask_ai_async, extract_memory
+from src import balance_ui
+from src.billing import ticket_by_admin_message
 from src.looks import (
     create_battle_infographic,
     create_infographic,
@@ -179,6 +181,7 @@ from src.util import (
     last_random_reply,
     logger,
     memory_to_messages,
+    note_chat_participant,
     user_femboy_state,
     user_looksmaxxing_state,
 
@@ -514,6 +517,27 @@ async def handle_tg_text(message: types.Message) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
 
+    if not message.from_user.is_bot:
+        note_chat_participant(
+            "tg", chat_id,
+            message.from_user.full_name,
+            message.from_user.username,
+        )
+
+    if user_id == balance_ui.SUPPORT_ADMIN_TG and message.reply_to_message:
+        tid = ticket_by_admin_message("tg", message.reply_to_message.message_id)
+        if tid:
+            await balance_ui.relay_support_reply_tg(_tg().tg_bot, tid, text)
+            return
+
+    if user_id in balance_ui.SUPPORT_WAITING:
+        if text.strip().lower() in ("/cancel", "отмена", "cancel", "/отмена"):
+            balance_ui.SUPPORT_WAITING.pop(user_id, None)
+            await _tg().reply_tg_html(message, balance_ui.t(lang, "support_cancel"))
+            return
+        await balance_ui.submit_support_tg(_tg().tg_bot, user_id, chat_id, text.strip(), lang)
+        return
+
     if user_id in prompt_waiting:
         waiting_msg_id = prompt_waiting.pop(user_id, None)
         new_prompt = text.strip()
@@ -551,6 +575,18 @@ async def handle_tg_text(message: types.Message) -> None:
 
     if tl.strip() in ("кульш статус", "kulsh status", "кульш состояние"):
         await _tg().handle_status(message)
+        return
+
+    if tl.strip() in ("кульш баланс", "баланс", "balance", "kulsh balance"):
+        await _tg().handle_balance(message)
+        return
+
+    if tl.strip() in ("кульш профиль", "профиль", "profile", "kulsh profile"):
+        await _tg().handle_profile(message)
+        return
+
+    if tl.startswith("кульш поддержка") or tl.startswith("support") or tl.strip() == "поддержка":
+        await _tg().handle_support(message)
         return
 
     m = re.match(r'(?i)^(?:кульш\s+)?(?:поиск|search|найди|найти)\s+(.+)$', text.strip(), re.DOTALL)

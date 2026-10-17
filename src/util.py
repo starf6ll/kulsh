@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.47.0
+# Kulsh GPT | v2.49.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.47.0"
+BOT_VERSION: str = "2.49.0"
 
 MSK = timezone(timedelta(hours=3))
 
@@ -125,22 +125,70 @@ DS_SERIES_GUILD_ID = 1403828466075304036
 DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
 
-# Чаты, где Кульшу разрешено говорить о своих кентах и внутренностях.
+# Чаты, где Кульшу разрешено говорить о своих кентах.
+# Правило: если в чате есть хотя бы один кент — можно. Плюс два исторических чата.
 TRUSTED_TG_CHAT_ID = 2413532783
 TRUSTED_DS_GUILD_ID = 1403828466075304036
 trusted_ds_channels: set[int] = set()
+
+# Алиасы кентов в нижнем регистре. Используются, чтобы понять, что кент есть в чате.
+KENT_ALIASES: tuple[str, ...] = (
+    "фоллз", "фолз", "starfall-apk", "starfall", "lolfall",
+    "рекми", "реким", "reqim", "rekme",
+    "нейзи", "neizy", "n3iz", "n3", "н3",
+    "ponil", "понил",
+    "kwinic", "чмо",
+)
+_KENT_RE = re.compile(
+    r'(?<![a-zа-яё0-9])(?:' + "|".join(re.escape(a) for a in KENT_ALIASES) + r')(?![a-zа-яё0-9])',
+    re.IGNORECASE,
+)
+
+TRUSTED_CHATS_FILE = 'trusted_chats.json'
+trusted_chats: dict[str, bool] = {}
+try:
+    if os.path.isfile(TRUSTED_CHATS_FILE):
+        with open(TRUSTED_CHATS_FILE, encoding='utf-8') as _f:
+            trusted_chats = {str(k): bool(v) for k, v in json.load(_f).items()}
+except Exception:
+    trusted_chats = {}
+
+
+def _save_trusted_chats() -> None:
+    try:
+        with open(TRUSTED_CHATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(trusted_chats, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"trusted_chats save fail: {e}")
+
+
+def mark_trusted_chat(platform: str, chat_id: int) -> None:
+    key = f"{platform}_{chat_id}"
+    if not trusted_chats.get(key):
+        trusted_chats[key] = True
+        _save_trusted_chats()
+
+
+def note_chat_participant(platform: str, chat_id: int, *names: str | None) -> None:
+    """Если среди участников засветился ник кента — помечаем чат доверенным."""
+    joined = " ".join(n for n in names if n)
+    if joined and _KENT_RE.search(joined):
+        mark_trusted_chat(platform, chat_id)
 
 
 def register_ds_channel(chat_id: int, guild_id: int | None) -> None:
     """Запоминает каналы «доверенного» сервера, чтобы промпт мог это учитывать."""
     if guild_id == TRUSTED_DS_GUILD_ID:
         trusted_ds_channels.add(chat_id)
+        mark_trusted_chat("ds", chat_id)
 
 
 def is_trusted_chat(platform: str, chat_id: int) -> bool:
-    if platform == "tg":
-        return chat_id == TRUSTED_TG_CHAT_ID
-    return chat_id in trusted_ds_channels
+    if platform == "tg" and chat_id == TRUSTED_TG_CHAT_ID:
+        return True
+    if platform == "ds" and chat_id in trusted_ds_channels:
+        return True
+    return bool(trusted_chats.get(f"{platform}_{chat_id}"))
 
 MINI_APP_URL = "https://kulsh.vercel.app"
 DONATE_URL = "https://kulsh.vercel.app/donate"
@@ -160,35 +208,92 @@ NEUTRALBEATS_MODELS = (
     "gpt-6-luna",
     "claude-haiku-5-5",
     "gpt-6.1-sol",
+    "gpt-6-astra",
+    "grok-4.7",
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "qwen3.8-max-0902",
 )
-MODEL_LIST = [
-    "glm-5.3-flash",
-    "deepseek-v4.1-flash",
-    "kimi-k3",
-    "deepseek-v4-pro",
-    "gpt-6-luna",
-    "claude-haiku-5-5",
-    "gpt-6.1-sol",
+GEMINI_MODELS = (
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
     "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
+)
+
+# Порядок компаний в меню. Внутри — от сильных к дешёвым.
+MODEL_GROUPS: list[tuple[str, list[str]]] = [
+    ("Anthropic", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-5-5"]),
+    ("DeepSeek", ["deepseek-v4-pro", "deepseek-v4.1-flash"]),
+    ("Google DeepMind", list(GEMINI_MODELS)),
+    ("Moonshot AI", ["kimi-k3"]),
+    ("OpenAI", ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"]),
+    ("Z.AI", ["glm-5.3-flash"]),
+    ("xAI", ["grok-4.7"]),
+    ("Alibaba", ["qwen3.8-max-0902"]),
 ]
+
+MODEL_LIST = [m for _company, _models in MODEL_GROUPS for m in _models]
+
 MODEL_DISPLAY: dict[str, str] = {
     "glm-5.3-flash": "🧊 GLM 5.3 Flash",
-    "deepseek-v4.1-flash": "🐋 DeepSeek 4.1 Flash",
+    "deepseek-v4.1-flash": "🐋 DeepSeek V4.1 Flash",
     "kimi-k3": "🌙 Kimi K3",
     "deepseek-v4-pro": "🐳 DeepSeek V4 Pro",
     "gpt-6-luna": "🌑 GPT-6 Luna",
     "claude-haiku-5-5": "🎐 Claude Haiku 5.5",
     "gpt-6.1-sol": "☀️ GPT-6.1 Sol",
-    "gemini-3.8-flash": "🚀 3.8 Flash",
-    "gemini-3.7-flash": "⚡ 3.7 Flash",
-    "gemini-3.6-flash": "🌠 3.6 Flash",
-    "gemini-3.5-flash": "💫 3.5 Flash",
-    "gemini-3.5-flash-lite": "✨ 3.5 Flash Lite",
-    "gemini-2.5-flash": "🌟 2.5 Flash",
-    "gemini-2.5-flash-lite": "💡 2.5 Flash Lite",
+    "gpt-6-astra": "🪐 GPT-6 Astra",
+    "grok-4.7": "🌀 Grok 4.7",
+    "claude-fable-5-1": "🎻 Claude Fable 5.1",
+    "claude-opus-5-5": "🎭 Claude Opus 5.5",
+    "claude-sonnet-5-5": "🎼 Claude Sonnet 5.5",
+    "qwen3.8-max-0902": "🐉 Qwen3.8 Max",
+    "gemini-3.8-flash": "🚀 Gemini 3.8 Flash",
+    "gemini-3.7-flash": "⚡ Gemini 3.7 Flash",
+    "gemini-3.6-flash": "🌠 Gemini 3.6 Flash",
+    "gemini-3.5-flash": "💫 Gemini 3.5 Flash",
+    "gemini-3.5-flash-lite": "✨ Gemini 3.5 Flash Lite",
+    "gemini-2.5-flash": "🌟 Gemini 2.5 Flash",
+    "gemini-2.5-flash-lite": "💡 Gemini 2.5 Flash Lite",
 }
+
+# Цены за 1 млн токенов в USD. Пусто/нет модели — бесплатно.
+MODEL_PRICING: dict[str, dict[str, float]] = {
+    "gpt-6-astra": {"input": 0.34, "output": 1.7, "cache_read": 0.034, "cache_write": 0.0},
+    "grok-4.7": {"input": 0.2, "output": 1.0, "cache_read": 0.02, "cache_write": 0.0},
+    "claude-fable-5-1": {"input": 1.2, "output": 6.0, "cache_read": 0.12, "cache_write": 1.2},
+    "claude-opus-5-5": {"input": 0.6, "output": 3.2, "cache_read": 0.06, "cache_write": 0.6},
+    "claude-sonnet-5-5": {"input": 0.4, "output": 2.0, "cache_read": 0.04, "cache_write": 0.4},
+    "qwen3.8-max-0902": {"input": 0.2, "output": 1.0, "cache_read": 0.02, "cache_write": 0.0},
+}
+
+PAID_MODELS = tuple(MODEL_PRICING.keys())
+USD_TO_RUB = float(os.getenv("USD_TO_RUB") or "90")
+
+
+def is_paid_model(model: str | None) -> bool:
+    return bool(model and model in MODEL_PRICING)
+
+
+def model_cost_rub(model: str, usage: dict[str, Any] | None) -> float:
+    """Стоимость запроса в рублях по usage от API."""
+    if not usage or model not in MODEL_PRICING:
+        return 0.0
+    price = MODEL_PRICING[model]
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    details = usage.get("prompt_tokens_details") or {}
+    cached = int(details.get("cached_tokens") or usage.get("cache_read_input_tokens") or 0)
+    cache_write = int(usage.get("cache_creation_input_tokens") or 0)
+    fresh_input = max(0, prompt_tokens - cached - cache_write)
+    usd = (
+        fresh_input * price["input"]
+        + cached * price["cache_read"]
+        + cache_write * price["cache_write"]
+        + completion_tokens * price["output"]
+    ) / 1_000_000.0
+    return round(usd * USD_TO_RUB, 6)
 
 
 def model_display_name(model: str | None, lang: str = "ru") -> str:
@@ -845,6 +950,8 @@ SEPARATOR_PATTERN = re.compile(
     r'!+\s*sep(?:[ae]rate)?(?![A-Za-z])',
     re.IGNORECASE,
 )
+# Служебный невидимый маркер: системное уведомление не нужно дробить на сообщения.
+NO_SPLIT_MARKER = "\u2063\u2063"
 # Реакция: допускаем пробелы, скобки и префикс «реакция», например:
 #   !react:👍   !react: 👍🔥   [реакция 😂]   (реакция: 🗿)   !реакция 🤣
 # Осторожно: голое слово «реакция» вне скобок НЕ считаем маркером, чтобы не ломать обычный текст.
@@ -934,18 +1041,23 @@ def _split_on_blank_lines(text: str) -> list[str]:
 def _auto_split_sentences(text: str) -> list[str]:
     """Фолбэк-разбивка: если маркер !separate не пришёл, но сообщение явно состоит из
     нескольких самостоятельных предложений — режем по границам предложений.
-    Консервативно: только 2-4 части, только если это похоже на живую речь."""
-    if not text or len(text) < 120:
+    Консервативно: только 2-5 частей, только если это похоже на живую речь."""
+    if not text or len(text) < 90:
         return [text]
     if _is_structured(text):
         return [text]
     # Режем по . ! ? …, но не внутри сокращений/чисел.
     parts = re.split(r'(?<=[.!?…])\s+(?=[A-ZА-ЯЁ0-9«"(])', text.strip())
     parts = [p.strip() for p in parts if p.strip()]
-    if len(parts) < 2 or len(parts) > 4:
-        return [text]
+    if len(parts) < 2 or len(parts) > 5:
+        # Иногда модель пишет мысли с новой строки без точек.
+        lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+        if 2 <= len(lines) <= 5:
+            parts = lines
+        else:
+            return [text]
     # Каждая часть должна быть достаточно осмысленной.
-    if any(len(p) < 12 for p in parts):
+    if any(len(p) < 8 for p in parts):
         return [text]
     return parts
 
@@ -953,6 +1065,9 @@ def _auto_split_sentences(text: str) -> list[str]:
 def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[str], list[str]]:
     raw_clean, markers, _ = extract_utility_markers(raw or "")
     markers = dedupe_markers(markers)
+    if raw_clean.startswith(NO_SPLIT_MARKER):
+        single = raw_clean[len(NO_SPLIT_MARKER):].strip()
+        return ([single] if single else []), markers
     if separate_enabled:
         segments = split_by_separator(raw_clean)
         if len(segments) <= 1 and raw_clean.strip():
@@ -997,6 +1112,7 @@ def scrub_stray_markers(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     # Срезаем ведущий временной префикс, если модель всё-таки налепила его в начало.
     text = strip_leading_time(text)
+    text = text.replace("\u2063", "")
     return text.strip()
 
 

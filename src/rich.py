@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.47.0
+# Kulsh GPT | v2.48.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -471,6 +471,8 @@ async def edit_rich_message(
             status, body = await _try_edit(None)
             if status == 200:
                 return True
+        if status == 400 and "message is not modified" in body:
+            return True
         logger.warning(f"editMessageText(rich) {status}: {body[:400]}")
         return False
     except Exception as e:

@@ -15,15 +15,16 @@ from src.util import (
     GITHUB_URL,
     MINI_APP_URL,
     MODEL_DISPLAY,
+    MODEL_GROUPS,
     MODEL_LIST,
     JsonDict,
     json_dict,
     tr,
     get_user_config,
     get_user_credits,
+    is_paid_model,
     model_display_name,
 )
-import src.util as state
 
 
 class StyledButton(InlineKeyboardButton):
@@ -62,29 +63,38 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     prompt_safe = html.escape(cfg.get("custom_prompt") or tr(lang, "cfg_prompt_default"))
+    if len(prompt_safe) > 240:
+        prompt_safe = prompt_safe[:240] + "…"
     line = "---"
     on = "✅"
     off = "❌"
     theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
     credits = get_user_credits(platform, user_id)
-    stream_txt = f"{on if cfg.get('streaming_enabled') else off} · {'premium' if state.premium_functions_enabled else 'off'}"
+    stream_txt = on if cfg.get("streaming_enabled") else off
     search_txt = on if cfg.get("web_search_enabled", True) else off
     mode_txt = _mode_display(cfg, lang)
     return (
         f"# {tr(lang, 'cfg_title')}\n\n{line}\n\n"
+        f"**{tr(lang, 'cfg_section_main')}**\n\n"
         f"{tr(lang, 'cfg_lang')}: {tr(lang, 'russian') if lang == 'ru' else tr(lang, 'english')}\n"
         f"{tr(lang, 'cfg_theme')}: {theme_disp}\n"
         f"{tr(lang, 'cfg_mode')}: {mode_txt}\n"
-        f"{tr(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}\n"
+        f"{tr(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}\n\n"
+        f"{line}\n\n"
+        f"**{tr(lang, 'cfg_section_content')}**\n\n"
+        f"{tr(lang, 'cfg_websearch')}: {search_txt}\n"
+        f"{tr(lang, 'cfg_drawing')}: {on if cfg.get('drawing_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_sep')}: {on if cfg.get('separate_enabled', True) else off}\n"
-        f"{tr(lang, 'cfg_stream')}: {stream_txt}\n"
+        f"{tr(lang, 'cfg_stream')}: {stream_txt}\n\n"
+        f"{line}\n\n"
+        f"**{tr(lang, 'cfg_section_chat')}**\n\n"
         f"{tr(lang, 'cfg_stickers')}: {on if cfg.get('stickers_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_autoreply')}: {on if cfg.get('random_reply_enabled') else off}\n"
-        f"{tr(lang, 'cfg_random')}: {on if cfg.get('random_messages_enabled', True) else off}\n"
-        f"{tr(lang, 'cfg_websearch')}: {search_txt}\n"
-        f"{tr(lang, 'cfg_credits_label')}: `{credits}/{DAILY_CREDITS}`\n\n"
+        f"{tr(lang, 'cfg_random')}: {on if cfg.get('random_messages_enabled', True) else off}\n\n"
         f"{line}\n\n"
-        f"{tr(lang, 'cfg_prompt_label')}: {prompt_safe}"
+        f"**{tr(lang, 'cfg_section_other')}**\n\n"
+        f"{tr(lang, 'cfg_credits_label')}: `{credits}/{DAILY_CREDITS}`\n"
+        f"{tr(lang, 'cfg_edit_prompt')}: {prompt_safe}"
     )
 
 
@@ -135,23 +145,50 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
     return kb
 
 
-def build_model_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+def build_model_keyboard(platform: str, chat_id: int, user_id: int,
+                         company_index: int | None = None) -> InlineKeyboardMarkup:
+    """Первый экран — компании, второй — модели выбранной компании."""
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     cur = cfg.get("model")
     kb = InlineKeyboardMarkup()
-    auto_mark = "🔘" if not cur else "▫️"
-    kb.row(btn(f"{auto_mark} {tr(lang, 'cfg_auto')}", style=None, callback_data="cfg:model_set:auto"))  # pyright: ignore[reportUnknownMemberType]
-    row: list[StyledButton] = []
-    for idx, model in enumerate(MODEL_LIST):
+
+    if company_index is None:
+        kb.row(btn(f"{'🔘' if not cur else '▫️'} {tr(lang, 'cfg_auto')}",
+                   style="success" if not cur else None,
+                   callback_data="cfg:model_set:auto"))  # pyright: ignore[reportUnknownMemberType]
+        row: list[StyledButton] = []
+        for i, (company, models) in enumerate(MODEL_GROUPS):
+            mark = "🔘" if (cur and cur in models) else "▫️"
+            row.append(btn(f"{mark} {company}", style=None, callback_data=f"cfg:model_co:{i}"))
+            if len(row) == 2:
+                kb.row(*row)  # pyright: ignore[reportUnknownMemberType]
+                row = []
+        if row:
+            kb.row(*row)  # pyright: ignore[reportUnknownMemberType]
+        kb.row(btn(tr(lang, "cfg_back"), style="primary", callback_data="cfg:model_back"))  # pyright: ignore[reportUnknownMemberType]
+        return kb
+
+    company_index = max(0, min(company_index, len(MODEL_GROUPS) - 1))
+    _company, models = MODEL_GROUPS[company_index]
+    row = []
+    for model in models:
+        if model not in MODEL_LIST:
+            continue
+        idx = MODEL_LIST.index(model)
         mark = "🔘" if cur == model else "▫️"
-        row.append(btn(f"{mark} {MODEL_DISPLAY.get(model, model)}", style=None, callback_data=f"cfg:model_set:{idx}"))
+        gem = " 💎" if is_paid_model(model) else ""
+        row.append(btn(f"{mark} {MODEL_DISPLAY.get(model, model)}{gem}", style=None,
+                       callback_data=f"cfg:model_set:{idx}"))
         if len(row) == 2:
             kb.row(*row)  # pyright: ignore[reportUnknownMemberType]
             row = []
     if row:
         kb.row(*row)  # pyright: ignore[reportUnknownMemberType]
-    kb.row(btn(tr(lang, "cfg_back"), style="primary", callback_data="cfg:model_back"))  # pyright: ignore[reportUnknownMemberType]
+    kb.row(  # pyright: ignore[reportUnknownMemberType]
+        btn(tr(lang, "cfg_back"), style="primary", callback_data="cfg:model"),
+        btn(tr(lang, "cfg_auto"), style=None, callback_data="cfg:model_set:auto"),
+    )
     return kb
 
 
@@ -208,14 +245,29 @@ def build_theme_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKey
     return kb
 
 
-def model_picker_text(platform: str, chat_id: int, user_id: int) -> str:
+def model_picker_text(platform: str, chat_id: int, user_id: int,
+                      company_index: int | None = None) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
-    return (
-        f"# {tr(lang, 'cfg_choose_model')}\n\n---\n\n"
-        f"{tr(lang, 'cfg_current')}: {model_display_name(cfg.get('model'), lang)}\n\n"
-        f"**{tr(lang, 'cfg_auto')}** — {tr(lang, 'cfg_auto_hint')}"
-    )
+    lines = [
+        f"# {tr(lang, 'cfg_choose_model')}",
+        "",
+        "---",
+        "",
+        f"**{tr(lang, 'cfg_current')}:** {model_display_name(cfg.get('model'), lang)}",
+        "",
+    ]
+    if company_index is None:
+        lines.append(f"**{tr(lang, 'cfg_auto')}** — {tr(lang, 'cfg_auto_hint')}")
+        lines.append("")
+        lines.append(tr(lang, "cfg_pick_company"))
+    else:
+        company_index = max(0, min(company_index, len(MODEL_GROUPS) - 1))
+        company, _models = MODEL_GROUPS[company_index]
+        lines.append(f"**{tr(lang, 'cfg_company')}:** {company}")
+        lines.append("")
+        lines.append(tr(lang, "cfg_pick_model"))
+    return "\n".join(lines).rstrip()
 
 
 def mode_picker_text(platform: str, chat_id: int, user_id: int, is_private: bool = True) -> str:
@@ -275,9 +327,10 @@ def build_menu_keyboard(lang: str, is_private: bool = True) -> InlineKeyboardMar
         btn(tr(lang, "btn_commands"), style=None, callback_data="menu:help"),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
+        btn(tr(lang, "btn_balance"), style="primary", callback_data="menu:balance"),
         btn(tr(lang, "btn_donate"), style=None, url=DONATE_URL),
-        btn(tr(lang, "btn_github"), style=None, url=GITHUB_URL),
     )
+    kb.row(btn(tr(lang, "btn_github"), style=None, url=GITHUB_URL))  # pyright: ignore[reportUnknownMemberType]
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(tr(lang, "btn_close"), style="danger", callback_data="menu:close")
     )
@@ -292,7 +345,8 @@ def build_start_keyboard(lang: str, is_private: bool = True) -> InlineKeyboardMa
         btn(tr(lang, "btn_settings"), style=None, callback_data="menu:settings"),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
+        btn(tr(lang, "btn_balance"), style="primary", callback_data="menu:balance"),
         btn(tr(lang, "btn_donate"), style=None, url=DONATE_URL),
-        btn(tr(lang, "btn_github"), style=None, url=GITHUB_URL),
     )
+    kb.row(btn(tr(lang, "btn_github"), style=None, url=GITHUB_URL))  # pyright: ignore[reportUnknownMemberType]
     return kb
