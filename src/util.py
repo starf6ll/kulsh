@@ -1088,6 +1088,9 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
     if raw_clean.startswith(NO_SPLIT_MARKER):
         single = raw_clean[len(NO_SPLIT_MARKER):].strip()
         return ([single] if single else []), markers
+    # Временные префиксы в начале любой строки: вырезаем, а в середине ответа
+    # считаем их разбивкой — как !separate.
+    raw_clean = strip_time_prefixes(raw_clean, as_separator=separate_enabled)
     if separate_enabled:
         segments = split_by_separator(raw_clean)
         if len(segments) <= 1 and raw_clean.strip():
@@ -1130,8 +1133,8 @@ def scrub_stray_markers(text: str) -> str:
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    # Срезаем ведущий временной префикс, если модель всё-таки налепила его в начало.
-    text = strip_leading_time(text)
+    # Срезаем временные префиксы, если модель всё-таки налепила их в начало строк.
+    text = strip_time_prefixes(text, as_separator=False)
     text = text.replace("\u2063", "")
     return text.strip()
 
@@ -1143,6 +1146,7 @@ _TIME_PREFIX_RE = re.compile(
     r'\[\s*\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*(?:\([^)\]]*\))?\s*\]'
     r'|\(\s*(?:(?:сегодня|today)\s+)?\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*(?:\([^)]*\))?\s*\)'
     r'|\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*[:：\-—]'
+    r'|\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*\([^)\n]*\)'
     r')'
     r'\s*'
     # Опционально «сегодня/today/МСК» ещё раз.
@@ -1150,21 +1154,36 @@ _TIME_PREFIX_RE = re.compile(
 )
 
 
-def strip_leading_time(text: str) -> str:
-    """Убирает ведущий префикс времени/даты, напр. '14:32 ', '[14:32] ', '14:32 МСК: '."""
+def strip_time_prefixes(text: str, as_separator: bool = True) -> str:
+    """Убирает временные префиксы в начале ЛЮБОЙ строки.
+
+    Если as_separator=True, префикс в середине ответа работает как !separate:
+    всё, что было до него, уходит отдельным сообщением, а не склеивается в одно.
+    Строки внутри блоков кода не трогаем.
+    """
     if not text:
         return text
-    original = text
-    for _ in range(2):
-        new = _TIME_PREFIX_RE.sub('', text, count=1)
-        new = re.sub(r'^\s*[-—:]+\s*', '', new)
-        if new == text:
-            break
-        text = new
-    # Не даём случайно съесть сообщение, которое целиком состоит из времени.
-    if not text.strip():
-        return original
-    return text
+    out: list[str] = []
+    in_code = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            in_code = not in_code
+            out.append(line)
+            continue
+        if in_code:
+            out.append(line)
+            continue
+        m = _TIME_PREFIX_RE.match(line)
+        if not m:
+            out.append(line)
+            continue
+        rest = line[m.end():].lstrip(" \t-—:.,")
+        if not rest:
+            continue
+        if as_separator and any(part.strip() for part in out):
+            out.append("!separate")
+        out.append(rest)
+    return "\n".join(out)
 
 
 EMOJI_RE = re.compile(
