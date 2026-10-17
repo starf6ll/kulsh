@@ -233,6 +233,11 @@ MODEL_GROUPS: list[tuple[str, list[str]]] = [
     ("Alibaba", ["qwen3.8-max-0902"]),
 ]
 
+# Пустые id (модель недоступна) в меню не показываем: иначе появляются
+# кнопки-пустышки, которые выглядят как «авто».
+MODEL_GROUPS = [(company, [m for m in models if m]) for company, models in MODEL_GROUPS]
+MODEL_GROUPS = [(company, models) for company, models in MODEL_GROUPS if models]
+
 MODEL_LIST = [m for _company, _models in MODEL_GROUPS for m in _models]
 
 MODEL_DISPLAY: dict[str, str] = {
@@ -299,6 +304,11 @@ def model_cost_rub(model: str, usage: dict[str, Any] | None) -> float:
 def model_display_name(model: str | None, lang: str = "ru") -> str:
     if not model:
         return "🎲 авто (все подряд)" if lang == "ru" else "🎲 auto (all models)"
+    if model.startswith("claude-"):
+        parts = model.split("-")
+        family = parts[1].capitalize() if len(parts) > 1 else "Claude"
+        ver = ".".join(parts[2:]) if len(parts) > 2 else ""
+        return f"Claude {family} {ver}".strip()
     return MODEL_DISPLAY.get(model, model)
 
 

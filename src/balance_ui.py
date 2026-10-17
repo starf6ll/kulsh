@@ -89,6 +89,14 @@ TXT = {
         "Sign in on the site with Google or GitHub, open the account menu, choose “Link” and enter this code. "
         "Balance, usage and API keys become shared. If the account already has a balance, the amounts are summed and the site warns you first.",
     ),
+    "link_off": (
+        "Привязка временно недоступна: общее хранилище не настроено. Администратору — переменные `KV_REST_API_URL` и `KV_REST_API_TOKEN`.",
+        "Linking is temporarily unavailable: shared storage is not configured. For the admin — `KV_REST_API_URL` and `KV_REST_API_TOKEN`.",
+    ),
+    "link_fail": (
+        "Не удалось сохранить код. Проверь связь с Redis и попробуй ещё раз.",
+        "Could not save the code. Check the Redis connection and try again.",
+    ),
     "api_title": ("🔑 API-ключи", "🔑 API keys"),
     "api_empty": ("Ключей пока нет.", "No keys yet."),
     "api_new": ("➕ Создать ключ", "➕ Create key"),
@@ -239,8 +247,16 @@ def _tokens(value: int) -> str:
     return f"{int(value):,}".replace(",", " ")
 
 
-def link_text(lang: str, code: str, nick: str = "") -> str:
+def link_text(lang: str, code: str, nick: str = "", error: str = "") -> str:
     site = "https://kulsh.vercel.app/chat"
+    if error:
+        return (
+            f"# {t(lang, 'link_title')}\n\n"
+            f"---\n\n"
+            f"{error}\n\n"
+            f"---\n\n"
+            f"{_legal(lang)}"
+        )
     return (
         f"# {t(lang, 'link_title')}\n\n"
         f"---\n\n"
@@ -317,7 +333,12 @@ def screen_text(screen: str, lang: str, user_id: int, nick: str) -> str:
     if screen == "profile":
         return profile_text(lang, user_id, nick)
     if screen == "link":
-        return link_text(lang, cloud.create_link_code("tg", user_id, name=nick) if cloud.enabled() else "—", nick)
+        if not cloud.enabled():
+            return link_text(lang, "", nick, error=t(lang, "link_off"))
+        code = cloud.create_link_code("tg", user_id, name=nick)
+        if not code or not cloud.read_link_code(code):
+            return link_text(lang, "", nick, error=t(lang, "link_fail"))
+        return link_text(lang, code, nick)
     if screen == "api":
         return api_text(lang, user_id)
     return balance_text(lang, user_id, nick)

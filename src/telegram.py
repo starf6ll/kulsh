@@ -67,8 +67,8 @@ from src.util import (
     DONATE_URL,
     GITHUB_URL,
     MINI_APP_URL,
-    MODEL_DISPLAY,
     MODEL_LIST,
+    model_display_name,
     PREMIUM_ADMIN_ID,
     REACT_PATTERN,
     STICKER_POOL,
@@ -350,7 +350,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
                 idx = int(value)
                 if 0 <= idx < len(MODEL_LIST):
                     cfg["model"] = MODEL_LIST[idx]
-                    toast = tr(lang, "cfg_model_set", MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx]))
+                    toast = tr(lang, "cfg_model_set", model_display_name(MODEL_LIST[idx], lang))
             except ValueError:
                 pass
         save_user_configs()

@@ -47,7 +47,6 @@ from src.util import (
     DONATE_URL,
     GITHUB_URL,
     MINI_APP_URL,
-    MODEL_DISPLAY,
     MODEL_GROUPS,
     MODEL_LIST,
     RECALL_MEDIA_ID_PATTERN,
@@ -1051,7 +1050,7 @@ class DsModelView(discord.ui.View):
             if m not in MODEL_LIST:
                 continue
             idx = MODEL_LIST.index(m)
-            label = MODEL_DISPLAY.get(m, m) + (" 💳" if is_paid_model(m) else "")
+            label = model_display_name(m, self.lang) + (" 💳" if is_paid_model(m) else "")
             options.append(discord.SelectOption(
                 label=label[:100], value=str(idx), default=cur == m,
             ))
@@ -1199,7 +1198,7 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
             await message.reply(tr(lang, "ds_setting_prompt_need"))
     elif param in ("модель", "model"):
         if not val:
-            lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" + (" 💳" if is_paid_model(m) else "")
+            lines = [f"`{i}` — {model_display_name(m, lang)}" + (" 💳" if is_paid_model(m) else "")
                      for i, m in enumerate(MODEL_LIST)]
             await message.reply(f"{tr(lang, 'ds_setting_model', model_display_name(cfg.get('model'), lang))}\n\n" + "\n".join(lines))
         elif val in ("авто", "auto"):
@@ -1210,7 +1209,7 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
                 idx = int(val)
                 if 0 <= idx < len(MODEL_LIST):
                     cfg["model"] = MODEL_LIST[idx]; save_user_configs()
-                    await message.reply(tr(lang, "ds_setting_model", MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])))
+                    await message.reply(tr(lang, "ds_setting_model", model_display_name(MODEL_LIST[idx], lang)))
                 else:
                     await message.reply(tr(lang, "ds_setting_model_badnum"))
             except ValueError:

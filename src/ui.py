@@ -14,7 +14,6 @@ from src.util import (
     DONATE_URL,
     GITHUB_URL,
     MINI_APP_URL,
-    MODEL_DISPLAY,
     MODEL_GROUPS,
     MODEL_LIST,
     JsonDict,
@@ -178,7 +177,7 @@ def build_model_keyboard(platform: str, chat_id: int, user_id: int,
         idx = MODEL_LIST.index(model)
         mark = "🔘" if cur == model else "▫️"
         gem = " 💳" if is_paid_model(model) else ""
-        row.append(btn(f"{mark} {MODEL_DISPLAY.get(model, model)}{gem}", style=None,
+        row.append(btn(f"{mark} {model_display_name(model, lang)}{gem}", style=None,
                        callback_data=f"cfg:model_set:{idx}"))
         if len(row) == 2:
             kb.row(*row)  # pyright: ignore[reportUnknownMemberType]
