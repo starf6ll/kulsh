@@ -968,7 +968,6 @@ class DsChoiceView(discord.ui.View):
                     label=company,
                     value=f"co:{i}",
                     default=has_current,
-                    description=tr(lang, "cfg_company")[:100],
                 ))
             placeholder = tr(lang, "cfg_choose_model")
         else:
@@ -1199,7 +1198,8 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
             await message.reply(tr(lang, "ds_setting_prompt_need"))
     elif param in ("модель", "model"):
         if not val:
-            lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" for i, m in enumerate(MODEL_LIST)]
+            lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" + (" 💳" if is_paid_model(m) else "")
+                     for i, m in enumerate(MODEL_LIST)]
             await message.reply(f"{tr(lang, 'ds_setting_model', model_display_name(cfg.get('model'), lang))}\n\n" + "\n".join(lines))
         elif val in ("авто", "auto"):
             cfg["model"] = None; save_user_configs()

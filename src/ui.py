@@ -264,7 +264,7 @@ def model_picker_text(platform: str, chat_id: int, user_id: int,
     else:
         company_index = max(0, min(company_index, len(MODEL_GROUPS) - 1))
         company, _models = MODEL_GROUPS[company_index]
-        lines.append(f"**{tr(lang, 'cfg_company')}:** {company}")
+        lines.append(f"**{company}**")
         lines.append("")
         lines.append(tr(lang, "cfg_pick_model"))
     return "\n".join(lines).rstrip()
