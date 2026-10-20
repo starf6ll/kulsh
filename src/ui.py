@@ -42,6 +42,17 @@ def btn(text: str, style: str | None = None, **kwargs: Any) -> StyledButton:
     return StyledButton(text, style=style, **kwargs)
 
 
+def _cfg_cb(user_id: int, action: str, *args: str) -> str:
+    """callback_data для кнопок настроек.
+
+    Owner вшиваем прямо в callback_data, чтобы проверка «это не твои настройки»
+    работала даже после рестарта бота и не зависела от памяти процесса.
+    Формат: cfg:<owner_id>:<action>[:<arg1>][:<arg2>]
+    """
+    parts = ["cfg", str(user_id), action, *args]
+    return ":".join(parts)
+
+
 def mini_app_button(lang: str, is_private: bool) -> StyledButton:
     text = tr(lang, "btn_open_mini")
     if is_private:
@@ -100,72 +111,73 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
 def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
+    cb = lambda action, *args: _cfg_cb(user_id, action, *args)  # noqa: E731
     kb = InlineKeyboardMarkup()
     kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(tr(lang, "cfg_lang"), style=None, callback_data="cfg:lang"),
-        btn(tr(lang, "cfg_theme"), style=None, callback_data="cfg:theme"),
+        btn(tr(lang, "cfg_lang"), style=None, callback_data=cb("lang")),
+        btn(tr(lang, "cfg_theme"), style=None, callback_data=cb("theme")),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_mode')}: {_mode_display(cfg, lang)}",
-            style="primary", callback_data="cfg:mode"),
+            style="primary", callback_data=cb("mode")),
         btn(f"{tr(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}",
-            style=None, callback_data="cfg:model"),
+            style=None, callback_data=cb("model")),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_websearch')}: {'✅' if cfg.get('web_search_enabled', True) else '❌'}",
-            style=None, callback_data="cfg:websearch"),
+            style=None, callback_data=cb("websearch")),
         btn(f"{tr(lang, 'cfg_drawing')}: {'✅' if cfg.get('drawing_enabled', True) else '❌'}",
-            style=None, callback_data="cfg:drawing"),
+            style=None, callback_data=cb("drawing")),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_sep')}: {'✅' if cfg.get('separate_enabled', True) else '❌'}",
-            style=None, callback_data="cfg:separate"),
+            style=None, callback_data=cb("separate")),
         btn(f"{tr(lang, 'cfg_stream')}: {'✅' if cfg.get('streaming_enabled') else '❌'}",
-            style=None, callback_data="cfg:streaming"),
+            style=None, callback_data=cb("streaming")),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_stickers')}: {'✅' if cfg.get('stickers_enabled', True) else '❌'}",
-            style=None, callback_data="cfg:stickers"),
+            style=None, callback_data=cb("stickers")),
         btn(f"{tr(lang, 'cfg_autoreply')}: {'✅' if cfg.get('random_reply_enabled') else '❌'}",
-            style=None, callback_data="cfg:autoreply"),
+            style=None, callback_data=cb("autoreply")),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_random')}: {'✅' if cfg.get('random_messages_enabled', True) else '❌'}",
-            style=None, callback_data="cfg:random"),
-        btn(tr(lang, "cfg_edit_prompt"), style="primary", callback_data="cfg:prompt"),
+            style=None, callback_data=cb("random")),
+        btn(tr(lang, "cfg_edit_prompt"), style="primary", callback_data=cb("prompt")),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(tr(lang, "cfg_reset_memory"), style="danger", callback_data="cfg:reset_memory"),
-        btn(tr(lang, "cfg_reset_prompt"), style="danger", callback_data="cfg:reset_prompt"),
+        btn(tr(lang, "cfg_reset_memory"), style="danger", callback_data=cb("reset_memory")),
+        btn(tr(lang, "cfg_reset_prompt"), style="danger", callback_data=cb("reset_prompt")),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(tr(lang, "cfg_apply_close"), style="success", callback_data="cfg:apply")
+        btn(tr(lang, "cfg_apply_close"), style="success", callback_data=cb("apply"))
     )
     return kb
 
 
 def build_model_keyboard(platform: str, chat_id: int, user_id: int,
                          company_index: int | None = None) -> InlineKeyboardMarkup:
-    """Первый экран — компании, второй — модели выбранной компании."""
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     cur = cfg.get("model")
+    cb = lambda action, *args: _cfg_cb(user_id, action, *args)  # noqa: E731
     kb = InlineKeyboardMarkup()
 
     if company_index is None:
         kb.row(btn(f"{'🔘' if not cur else '▫️'} {tr(lang, 'cfg_auto')}",
                    style="success" if not cur else None,
-                   callback_data="cfg:model_set:auto"))  # pyright: ignore[reportUnknownMemberType]
+                   callback_data=cb("model_set", "auto")))  # pyright: ignore[reportUnknownMemberType]
         row: list[StyledButton] = []
         for i, (company, models) in enumerate(MODEL_GROUPS):
             mark = "🔘" if (cur and cur in models) else "▫️"
-            row.append(btn(f"{mark} {company}", style=None, callback_data=f"cfg:model_co:{i}"))
+            row.append(btn(f"{mark} {company}", style=None, callback_data=cb("model_co", str(i))))
             if len(row) == 2:
                 kb.row(*row)  # pyright: ignore[reportUnknownMemberType]
                 row = []
         if row:
             kb.row(*row)  # pyright: ignore[reportUnknownMemberType]
-        kb.row(btn(tr(lang, "cfg_back"), style="primary", callback_data="cfg:model_back"))  # pyright: ignore[reportUnknownMemberType]
+        kb.row(btn(tr(lang, "cfg_back"), style="primary", callback_data=cb("model_back")))  # pyright: ignore[reportUnknownMemberType]
         return kb
 
     company_index = max(0, min(company_index, len(MODEL_GROUPS) - 1))
@@ -178,15 +190,15 @@ def build_model_keyboard(platform: str, chat_id: int, user_id: int,
         mark = "🔘" if cur == model else "▫️"
         gem = " 💳" if is_paid_model(model) else ""
         row.append(btn(f"{mark} {model_display_name(model, lang)}{gem}", style=None,
-                       callback_data=f"cfg:model_set:{idx}"))
+                       callback_data=cb("model_set", str(idx))))
         if len(row) == 2:
             kb.row(*row)  # pyright: ignore[reportUnknownMemberType]
             row = []
     if row:
         kb.row(*row)  # pyright: ignore[reportUnknownMemberType]
     kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(tr(lang, "cfg_back"), style="primary", callback_data="cfg:model"),
-        btn(tr(lang, "cfg_auto"), style=None, callback_data="cfg:model_set:auto"),
+        btn(tr(lang, "cfg_back"), style="primary", callback_data=cb("model")),
+        btn(tr(lang, "cfg_auto"), style=None, callback_data=cb("model_set", "auto")),
     )
     return kb
 
@@ -195,6 +207,7 @@ def build_mode_keyboard(platform: str, chat_id: int, user_id: int, is_private: b
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     cur = str(cfg.get("communication_mode", "kent"))
+    cb = lambda action, *args: _cfg_cb(user_id, action, *args)  # noqa: E731
     kb = InlineKeyboardMarkup()
 
     def mark(mode: str) -> str:
@@ -202,15 +215,15 @@ def build_mode_keyboard(platform: str, chat_id: int, user_id: int, is_private: b
 
     kb.row(btn(f"{mark('kent')} {tr(lang, 'mode_kent')}",  # pyright: ignore[reportUnknownMemberType]
                style="primary" if cur == "kent" else None,
-               callback_data="cfg:mode_set:kent"))
+               callback_data=cb("mode_set", "kent")))
     kb.row(btn(f"{mark('assistant')} {tr(lang, 'mode_assistant')}",  # pyright: ignore[reportUnknownMemberType]
                style="primary" if cur == "assistant" else None,
-               callback_data="cfg:mode_set:assistant"))
+               callback_data=cb("mode_set", "assistant")))
     if is_private:
         kb.row(btn(f"{mark('pro')} {tr(lang, 'mode_pro')}",  # pyright: ignore[reportUnknownMemberType]
                    style="primary" if cur == "pro" else None,
-                   callback_data="cfg:mode_set:pro"))
-    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data="cfg:sub_back"))  # pyright: ignore[reportUnknownMemberType]
+                   callback_data=cb("mode_set", "pro")))
+    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data=cb("sub_back")))  # pyright: ignore[reportUnknownMemberType]
     return kb
 
 
@@ -218,14 +231,15 @@ def build_lang_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyb
     cfg = get_user_config(platform, chat_id, user_id)
     cur = cfg.get("language", "ru")
     lang = cfg.get("language", "ru")
+    cb = lambda action, *args: _cfg_cb(user_id, action, *args)  # noqa: E731
     kb = InlineKeyboardMarkup()
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{'🔘' if cur == 'ru' else '▫️'} Русский 🇷🇺",
-            style="primary" if cur == "ru" else None, callback_data="cfg:lang_set:ru"),
+            style="primary" if cur == "ru" else None, callback_data=cb("lang_set", "ru")),
         btn(f"{'🔘' if cur == 'en' else '▫️'} English 🇬🇧",
-            style="primary" if cur == "en" else None, callback_data="cfg:lang_set:en"),
+            style="primary" if cur == "en" else None, callback_data=cb("lang_set", "en")),
     )
-    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data="cfg:sub_back"))  # pyright: ignore[reportUnknownMemberType]
+    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data=cb("sub_back")))  # pyright: ignore[reportUnknownMemberType]
     return kb
 
 
@@ -233,14 +247,15 @@ def build_theme_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKey
     cfg = get_user_config(platform, chat_id, user_id)
     cur = cfg.get("theme", "dark")
     lang = cfg.get("language", "ru")
+    cb = lambda action, *args: _cfg_cb(user_id, action, *args)  # noqa: E731
     kb = InlineKeyboardMarkup()
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{'🔘' if cur == 'dark' else '▫️'} {'Тёмная 🌑' if lang == 'ru' else 'Dark 🌑'}",
-            style="primary" if cur == "dark" else None, callback_data="cfg:theme_set:dark"),
+            style="primary" if cur == "dark" else None, callback_data=cb("theme_set", "dark")),
         btn(f"{'🔘' if cur == 'light' else '▫️'} {'Светлая ☀️' if lang == 'ru' else 'Light ☀️'}",
-            style="primary" if cur == "light" else None, callback_data="cfg:theme_set:light"),
+            style="primary" if cur == "light" else None, callback_data=cb("theme_set", "light")),
     )
-    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data="cfg:sub_back"))  # pyright: ignore[reportUnknownMemberType]
+    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data=cb("sub_back")))  # pyright: ignore[reportUnknownMemberType]
     return kb
 
 
@@ -289,8 +304,6 @@ def mode_picker_text(platform: str, chat_id: int, user_id: int, is_private: bool
 # МЕНЮ / START
 # ============================================================
 def build_menu_text(lang: str) -> str:
-    # Таблица: K | *U* | L | *S* | H  → K, L, H — без заливки (is_header=False),
-    # U и S — с заливкой (is_header=True через *одинарные* звёздочки).
     return (
         "|K|*U*|L|*S*|H|\n\n"
         f"# {tr(lang, 'menu_title')}\n\n"

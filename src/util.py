@@ -13,6 +13,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,38 @@ from PIL import ImageFont
 from telebot.async_telebot import AsyncTeleBot
 
 # ============================================================
+# ПУТИ К ДАННЫМ
+# ------------------------------------------------------------
+# Все файлы состояния живут в BASE_DIR/data/, чтобы git pull и
+# git reset --hard не затирали пользовательские настройки.
+# DATA_DIR автоматически добавляется в .gitignore.
+# ============================================================
+BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR: str = os.path.join(BASE_DIR, "data")
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except Exception:
+    DATA_DIR = os.getcwd()
+
+BOT_LOG_FILE: str = os.path.join(DATA_DIR, "bot.log")
+DONATIONS_FILE: str = os.path.join(DATA_DIR, "donations.json")
+MEMORY_FILE: str = os.path.join(DATA_DIR, "long_term_memory.json")
+CREDITS_FILE: str = os.path.join(DATA_DIR, "credits.json")
+USER_CONFIGS_FILE: str = os.path.join(DATA_DIR, "user_configs.json")
+DS_SCOPES_FILE: str = os.path.join(DATA_DIR, "ds_scopes.json")
+TRUSTED_CHATS_FILE: str = os.path.join(DATA_DIR, "trusted_chats.json")
+PREMIUM_STATE_FILE: str = os.path.join(DATA_DIR, "premium.json")
+BALANCES_FILE: str = os.path.join(DATA_DIR, "balances.json")
+DA_PROCESSED_FILE: str = os.path.join(DATA_DIR, "da_processed.json")
+TICKETS_FILE: str = os.path.join(DATA_DIR, "support_tickets.json")
+DA_TOKEN_FILE: str = os.path.join(DATA_DIR, "da_token.json")
+PROMO_FILE: str = os.path.join(DATA_DIR, "promocodes.json")
+ADMIN_USERS_FILE: str = os.path.join(DATA_DIR, "admin_users.json")
+BLOCK_FILE: str = os.path.join(DATA_DIR, "blocked_users.json")
+ADMIN_REQUESTS_FILE: str = os.path.join(DATA_DIR, "request_log.json")
+CLOUD_MIGRATED_FILE: str = os.path.join(DATA_DIR, "cloud_migrated.json")
+
+# ============================================================
 # ЛОГГЕР
 # ============================================================
 logger = logging.getLogger('KulshBot')
@@ -38,11 +71,14 @@ log_formatter = logging.Formatter(
     '%(asctime)s | %(levelname)-7s | %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
 )
-file_handler = RotatingFileHandler('bot.log', maxBytes=5 * 1024 * 1024, backupCount=1, encoding='utf-8')
-file_handler.setFormatter(log_formatter)
+try:
+    file_handler = RotatingFileHandler(BOT_LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=1, encoding='utf-8')
+    file_handler.setFormatter(log_formatter)
+    logger.addHandler(file_handler)
+except Exception:
+    pass
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
-logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
@@ -101,6 +137,39 @@ def human_uptime() -> str:
     return " ".join(parts)
 
 
+# ============================================================
+# GITIGNORE
+# ------------------------------------------------------------
+# При первом запуске дописываем data/ в .gitignore, чтобы JSON-файлы
+# состояния не попали в репо и не затирались при git pull / reset.
+# ============================================================
+def _ensure_gitignore() -> None:
+    gi = os.path.join(BASE_DIR, ".gitignore")
+    needed = ["data/", "*.log", "__pycache__/", "*.pyc", ".venv/", "venv/"]
+    try:
+        existing = ""
+        if os.path.isfile(gi):
+            with open(gi, encoding="utf-8") as f:
+                existing = f.read()
+        lines = set(line.strip() for line in existing.splitlines())
+        missing = [n for n in needed if n not in lines]
+        if missing:
+            with open(gi, "a", encoding="utf-8") as f:
+                if existing and not existing.endswith("\n"):
+                    f.write("\n")
+                for line in missing:
+                    f.write(line + "\n")
+            logger.info(f".gitignore: добавлено {missing}")
+    except Exception as e:
+        logger.warning(f"_ensure_gitignore: {e}")
+
+
+try:
+    _ensure_gitignore()
+except Exception:
+    pass
+
+
 load_dotenv()
 TG_TOKEN: str = os.getenv('TG_TOKEN') or ""
 DISCORD_TOKEN: str = os.getenv('DISCORD_TOKEN') or ""
@@ -144,7 +213,6 @@ _KENT_RE = re.compile(
     re.IGNORECASE,
 )
 
-TRUSTED_CHATS_FILE = 'trusted_chats.json'
 trusted_chats: dict[str, bool] = {}
 try:
     if os.path.isfile(TRUSTED_CHATS_FILE):
@@ -233,8 +301,6 @@ MODEL_GROUPS: list[tuple[str, list[str]]] = [
     ("Alibaba", ["qwen3.8-max-0902"]),
 ]
 
-# Пустые id (модель недоступна) в меню не показываем: иначе появляются
-# кнопки-пустышки, которые выглядят как «авто».
 MODEL_GROUPS = [(company, [m for m in models if m]) for company, models in MODEL_GROUPS]
 MODEL_GROUPS = [(company, models) for company, models in MODEL_GROUPS if models]
 
@@ -250,10 +316,8 @@ MODEL_LIST = [m for _company, _models in MODEL_GROUPS for m in _models]
 # NO_VISION_MODELS не пробуем, если в запросе есть картинка.
 # ============================================================
 AUTO_ORDER_FREE: list[str] = [
-    # 1. Быстрая первая линия — болтовня, приветствия, лёгкие вопросы
     "glm-5.3-flash",
     "deepseek-v4.1-flash",
-    # 2. Прочие бесплатные с vision, до Gemini 2.5
     "kimi-k3",
     "gpt-6-luna",
     "claude-haiku-5-5",
@@ -263,24 +327,20 @@ AUTO_ORDER_FREE: list[str] = [
     "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
-    # 3. Gemini 2.5 — последние среди бесплатных
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
-    # 4. DeepSeek V4 Pro — самая тяжёлая бесплатная (без vision!)
     "deepseek-v4-pro",
 ]
 
-# Платные — строго по возрастанию цены за input+output.
 AUTO_ORDER_PAID: list[str] = [
-    "grok-4.7",           # $0.2 / $1.0
-    "qwen3.8-max-0902",   # $0.2 / $1.0
-    "gpt-6-astra",        # $0.34 / $1.7
-    "claude-sonnet-5-5",  # $0.4 / $2.0
-    "claude-opus-5-5",    # $0.6 / $3.2
-    "claude-fable-5-1",   # $1.2 / $6.0
+    "grok-4.7",
+    "qwen3.8-max-0902",
+    "gpt-6-astra",
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    "claude-fable-5-1",
 ]
 
-# Модели без поддержки изображений. Пропускаем их, если в запросе есть медиа.
 NO_VISION_MODELS: frozenset[str] = frozenset({"deepseek-v4-pro"})
 
 MODEL_DISPLAY: dict[str, str] = {
@@ -306,7 +366,6 @@ MODEL_DISPLAY: dict[str, str] = {
     "gemini-2.5-flash-lite": "💡 Gemini 2.5 Flash Lite",
 }
 
-# Цены за 1 млн токенов в USD. Пусто/нет модели — бесплатно.
 MODEL_PRICING: dict[str, dict[str, float]] = {
     "gpt-6-astra": {"input": 0.34, "output": 1.7, "cache_read": 0.034, "cache_write": 0.0},
     "grok-4.7": {"input": 0.2, "output": 1.0, "cache_read": 0.02, "cache_write": 0.0},
@@ -357,7 +416,41 @@ def model_display_name(model: str | None, lang: str = "ru") -> str:
 
 LOG_INTRO = "🍷🗿 Вот логи сервера, босс:"
 PREMIUM_ADMIN_ID = 1420898868
-premium_functions_enabled: bool = True
+
+
+# ============================================================
+# PREMIUM FUNCTIONS STATE
+# ------------------------------------------------------------
+# Раньше сбрасывался в True при каждом рестарте. Теперь хранится
+# в data/premium.json и переключается через set_premium_functions_enabled.
+# ============================================================
+def _load_premium_state() -> bool:
+    try:
+        if os.path.isfile(PREMIUM_STATE_FILE):
+            with open(PREMIUM_STATE_FILE, encoding='utf-8') as f:
+                return bool(json.load(f).get('enabled', True))
+    except Exception:
+        pass
+    return True
+
+
+def _save_premium_state(enabled: bool) -> None:
+    try:
+        with open(PREMIUM_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'enabled': bool(enabled)}, f)
+    except Exception as e:
+        logger.warning(f"premium state save: {e}")
+
+
+premium_functions_enabled: bool = _load_premium_state()
+
+
+def set_premium_functions_enabled(enabled: bool) -> None:
+    global premium_functions_enabled
+    premium_functions_enabled = bool(enabled)
+    _save_premium_state(premium_functions_enabled)
+
+
 AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 
 COMMUNICATION_MODES = ("kent", "assistant", "pro")
@@ -441,8 +534,6 @@ SearchHit: TypeAlias = dict[str, str]
 ChartTheme: TypeAlias = dict[str, Any]
 SeriesSpec: TypeAlias = dict[str, Any]
 
-# Последние результаты поиска по чату — чтобы бот мог выдать источники по просьбе,
-# даже если не вставил их в сам ответ.
 last_search_sources: dict[str, list[SearchHit]] = {}
 HandlerT = TypeVar("HandlerT", bound=Callable[..., Any])
 
@@ -513,11 +604,12 @@ chat_memories: dict[str, deque[dict[str, Any]]] = {}
 voice_text_channels: dict[int, Any] = {}
 donations_data: dict[str, Any] = {}
 user_configs: defaultdict[str, dict[str, Any]] = defaultdict(dict)
-config_msg_owners: dict[int, int] = {}
+# (chat_id, message_id) -> owner user_id. Используем кортеж, а не только message_id,
+# потому что message_id уникален только внутри чата.
+config_msg_owners: dict[tuple[int, int], int] = {}
 config_trigger_msgs: dict[str, int] = {}
 prompt_waiting: dict[int, int] = {}
 config_children_msgs: dict[tuple[int, int], list[int]] = {}
-# bot_message_id -> исходная команда пользователя и связанные сообщения этого экрана.
 ui_flow_by_msg: dict[int, dict[str, Any]] = {}
 credits_data: dict[str, dict[str, Any]] = {}
 tools_sessions: dict[int, dict[str, Any]] = {}
@@ -532,11 +624,6 @@ user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
 user_femboy_state: defaultdict[int, bool] = defaultdict(lambda: False)
 ds_config_scope: dict[int, str] = {}
 
-DONATIONS_FILE = 'donations.json'
-MEMORY_FILE = 'long_term_memory.json'
-CREDITS_FILE = 'credits.json'
-USER_CONFIGS_FILE = 'user_configs.json'
-DS_SCOPES_FILE = 'ds_scopes.json'
 DAILY_CREDITS = 500
 COST_ARCHIVE_EDIT = 500
 COST_CONSOLE_CMD = 25
@@ -629,6 +716,38 @@ def load_ds_scopes() -> None:
         s = str(v)
         if s in DS_SCOPES:
             ds_config_scope[key] = s
+
+
+def save_all_state() -> None:
+    """Сохранить всё состояние на диск. Вызывается при выходе и перед git-обновлением."""
+    try:
+        save_user_configs()
+    except Exception as e:
+        logger.warning(f"save_all_state/user_configs: {e}")
+    try:
+        save_long_term_memory(long_term_memory)
+    except Exception as e:
+        logger.warning(f"save_all_state/long_term_memory: {e}")
+    try:
+        save_credits()
+    except Exception as e:
+        logger.warning(f"save_all_state/credits: {e}")
+    try:
+        save_donations()
+    except Exception as e:
+        logger.warning(f"save_all_state/donations: {e}")
+    try:
+        save_ds_scopes()
+    except Exception as e:
+        logger.warning(f"save_all_state/ds_scopes: {e}")
+    try:
+        _save_trusted_chats()
+    except Exception as e:
+        logger.warning(f"save_all_state/trusted_chats: {e}")
+    try:
+        _save_premium_state(premium_functions_enabled)
+    except Exception as e:
+        logger.warning(f"save_all_state/premium: {e}")
 
 
 def get_ds_scope(chat_id: int) -> str:
@@ -774,7 +893,7 @@ def get_chat_key(platform: str, chat_id: int) -> str:
 # ============================================================
 def read_log_tail(max_lines: int = 20) -> str:
     try:
-        with open('bot.log', 'r', encoding='utf-8', errors='replace') as f:
+        with open(BOT_LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
         if not lines:
             return "Логи пусты."
@@ -1014,7 +1133,6 @@ UTILITY_PATTERNS = {
     "group_info": re.compile(r'!\s*group[\s_]*info(?![A-Za-z])', re.IGNORECASE),
     "user_info": re.compile(r'!\s*user[\s_]*info(?::\s*(\d+))?(?![A-Za-z])', re.IGNORECASE),
 }
-# Хвостовые маркеры, которые не должны попадать в чат (обрабатываются отдельно или вырезаются).
 STRAY_EXTRA_PATTERNS = (
     re.compile(r'!\s*draw\b', re.IGNORECASE),
     re.compile(r'!\s*term\b[^\n]*', re.IGNORECASE),
@@ -1023,17 +1141,12 @@ SEPARATOR_PATTERN = re.compile(
     r'!+\s*sep(?:[ae]rate)?(?![A-Za-z])',
     re.IGNORECASE,
 )
-# Служебный невидимый маркер: системное уведомление не нужно дробить на сообщения.
 NO_SPLIT_MARKER = "\u2063\u2063"
-# Реакция: допускаем пробелы, скобки и префикс «реакция», например:
-#   !react:👍   !react: 👍🔥   [реакция 😂]   (реакция: 🗿)   !реакция 🤣
-# Осторожно: голое слово «реакция» вне скобок НЕ считаем маркером, чтобы не ломать обычный текст.
 REACT_PATTERN = re.compile(
     r'(?:!\s*(?:react|реакция)\s*:?\s*([^\s\n]+)'
     r'|[\[\(]\s*реакция\s*:?\s*([^\s\n\]\)]+(?:\s*[^\s\n\]\)]+)*?)\s*[\]\)])',
     re.IGNORECASE,
 )
-# Узкий шаблон «!react:<эмодзи>» — для точного извлечения полезной нагрузки.
 REACT_STRICT_PATTERN = re.compile(
     r'!\s*(?:react|реакция)\s*:\s*([^\s\n]+)',
     re.IGNORECASE,
@@ -1090,14 +1203,10 @@ def dedupe_markers(markers: list[str]) -> list[str]:
 
 
 def _is_structured(text: str) -> bool:
-    """Похоже ли на структурированный ответ (код/список/заголовок/таблица),
-    который НЕ надо дробить на отдельные сообщения."""
     return bool(re.search(r'```|^\s*[-*+]\s|^\s*\d+\.\s|^#{1,6}\s|^\|', text, re.MULTILINE))
 
 
 def _split_on_blank_lines(text: str) -> list[str]:
-    """Модели (особенно GLM/DeepSeek) любят вместо !separate ставить пустую строку.
-    Если частей 2-4 и это не структурированный текст — считаем это разбивкой."""
     if _is_structured(text):
         return [text]
     parts = [p.strip() for p in re.split(r'\n\s*\n', text.strip()) if p.strip()]
@@ -1105,31 +1214,24 @@ def _split_on_blank_lines(text: str) -> list[str]:
         return [text]
     if any(len(p) < 4 for p in parts):
         return [text]
-    # Каждая часть не должна сама быть простынёй — иначе это реально один блок.
     if sum(1 for p in parts if len(p) > 400) > 1:
         return [text]
     return parts
 
 
 def _auto_split_sentences(text: str) -> list[str]:
-    """Фолбэк-разбивка: если маркер !separate не пришёл, но сообщение явно состоит из
-    нескольких самостоятельных предложений — режем по границам предложений.
-    Консервативно: только 2-5 частей, только если это похоже на живую речь."""
     if not text or len(text) < 90:
         return [text]
     if _is_structured(text):
         return [text]
-    # Режем по . ! ? …, но не внутри сокращений/чисел.
     parts = re.split(r'(?<=[.!?…])\s+(?=[A-ZА-ЯЁ0-9«"(])', text.strip())
     parts = [p.strip() for p in parts if p.strip()]
     if len(parts) < 2 or len(parts) > 5:
-        # Иногда модель пишет мысли с новой строки без точек.
         lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
         if 2 <= len(lines) <= 5:
             parts = lines
         else:
             return [text]
-    # Каждая часть должна быть достаточно осмысленной.
     if any(len(p) < 8 for p in parts):
         return [text]
     return parts
@@ -1141,20 +1243,16 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
     if raw_clean.startswith(NO_SPLIT_MARKER):
         single = raw_clean[len(NO_SPLIT_MARKER):].strip()
         return ([single] if single else []), markers
-    # Временные префиксы в начале любой строки: вырезаем, а в середине ответа
-    # считаем их разбивкой — как !separate.
     raw_clean = strip_time_prefixes(raw_clean, as_separator=separate_enabled)
     if separate_enabled:
         segments = split_by_separator(raw_clean)
         if len(segments) <= 1 and raw_clean.strip():
-            # Модель проигнорировала !separate и поставила пустые строки — уважаем это.
             segments = _split_on_blank_lines(raw_clean.strip())
         if len(segments) <= 1 and raw_clean.strip():
             segments = _auto_split_sentences(raw_clean.strip())
     else:
         raw_clean = SEPARATOR_PATTERN.sub(' ', raw_clean)
         raw_clean = re.sub(r'[ \t]{2,}', ' ', raw_clean).strip()
-        # Даже при выключенной разбивке не оставляем двойных пустых строк.
         raw_clean = re.sub(r'\n{2,}', '\n', raw_clean)
         segments = [raw_clean]
     clean_segments = [s.strip() for s in segments if s and s.strip()]
@@ -1181,36 +1279,80 @@ def normalize_typography(text: str) -> str:
     parts = _FENCE_SPLIT_RE.split(text)
     out: list[str] = []
     for i, part in enumerate(parts):
-        # Нечётные индексы — это захваченные блоки ``` ... ```.
         if i % 2 == 1:
             out.append(part)
             continue
-        # Внутри обычного текста выделяем inline-code и не трогаем его.
         sub_parts = _INLINE_CODE_SPLIT_RE.split(part)
         sub_out: list[str] = []
         for j, sub in enumerate(sub_parts):
             if j % 2 == 1:
                 sub_out.append(sub)
                 continue
-            # Длинное тире (em/en) → обычный дефис.
             sub = re.sub(r'[—–]', '-', sub)
-            # «ёлочки», немецкие и типографские двойные кавычки → обычные ".
             sub = sub.replace('«', '"').replace('»', '"')
             sub = sub.replace('„', '"').replace('‟', '"')
             sub = re.sub(r'[“”]', '"', sub)
-            # Одинарные «умные» кавычки → обычный апостроф.
             sub = re.sub(r'[‘’‚‛]', "'", sub)
             sub_out.append(sub)
         out.append(''.join(sub_out))
     return ''.join(out)
 
 
+# ============================================================
+# ПУНКТУАЦИЯ ДЛЯ ЧАТА
+# ------------------------------------------------------------
+# Проблема: модели с сильным грамматическим датасетом ставят запятые
+# перед "и/но/что/как/когда/если/хотя/пока" — по правилам русского
+# языка. Но в чате так не пишут.
+#
+# Не трогает:
+#   - блоки кода и inline-code
+#   - списки, таблицы, заголовки
+#   - длинные сообщения
+#   - вопросительный знак и …
+# ============================================================
+_CHAT_COMMAS_TO_DROP = re.compile(
+    r',\s+(?=(?:и|но|что|чтобы|чтоб|как|когда|если|хотя|пока)\b)',
+    re.IGNORECASE,
+)
+_CHAT_TRAILING_DOT = re.compile(r'[.!]+\s*$')
+_CHAT_LONG_LIMIT = 180
+_CHAT_SHORT_LIMIT = 140
+
+
+def _is_structured_chat_text(text: str) -> bool:
+    if not text:
+        return False
+    if '```' in text or '`' in text:
+        return True
+    if re.search(r'^\s*[-*+]\s|^\s*\d+\.\s|^#{1,6}\s|^\|', text, re.MULTILINE):
+        return True
+    if '!draw' in text or '!chart' in text or '!search' in text:
+        return True
+    return False
+
+
+def strip_chat_punctuation(text: str) -> str:
+    """Убирает лишнюю пунктуацию, которую модель ставит по правилам грамматики.
+    В чате так не пишут. Применять ТОЛЬКО в режиме кента.
+    """
+    if not text:
+        return text
+    if _is_structured_chat_text(text):
+        return text
+    if len(text) > _CHAT_LONG_LIMIT:
+        return text
+    text = _CHAT_COMMAS_TO_DROP.sub(' ', text)
+    if len(text) <= _CHAT_SHORT_LIMIT:
+        text = _CHAT_TRAILING_DOT.sub('', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    return text.strip()
+
+
 def scrub_stray_markers(text: str) -> str:
     """Страховка: удаляет уцелевшие служебные маркеры и голые '!' перед буквами."""
     if not text:
         return text
-    # Сначала нормализуем типографику (тире, кавычки) — до всех regex,
-    # чтобы дальше работать с уже клавиатурными символами.
     text = normalize_typography(text)
     pats = [
         SEPARATOR_PATTERN,
@@ -1225,15 +1367,12 @@ def scrub_stray_markers(text: str) -> str:
     ]
     for pat in pats:
         text = pat.sub(' ', text)
-    # Убираем одинокие '!' перед кириллицей (артефакт старых версий)
     text = re.sub(r'!\s*(?=[а-яёА-ЯЁ])', '', text)
-    # Убираем голые маркеры вида "!react" / "!separate" даже без полезной нагрузки
     text = re.sub(r'!\s*(?:react|реакция|why|separate|sep[ae]rate)\b\s*:?', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    # Срезаем временные префиксы, если модель всё-таки налепила их в начало строк.
     text = strip_time_prefixes(text, as_separator=False)
     text = text.replace("\u2063", "")
     return text.strip()
@@ -1241,7 +1380,6 @@ def scrub_stray_markers(text: str) -> str:
 
 _TIME_PREFIX_RE = re.compile(
     r'^\s*'
-    # Вариант 1: HH:MM[:SS] [МСК] [ (возраст) ] — опционально в скобках и с разделителем после.
     r'(?:'
     r'\[\s*\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*(?:\([^)\]]*\))?\s*\]'
     r'|\(\s*(?:(?:сегодня|today)\s+)?\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*(?:\([^)]*\))?\s*\)'
@@ -1249,18 +1387,11 @@ _TIME_PREFIX_RE = re.compile(
     r'|\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?\s*\([^)\n]*\)'
     r')'
     r'\s*'
-    # Опционально «сегодня/today/МСК» ещё раз.
     r'(?:(?:сегодня|today)\s*[,:\-—]?\s*)?'
 )
 
 
 def strip_time_prefixes(text: str, as_separator: bool = True) -> str:
-    """Убирает временные префиксы в начале ЛЮБОЙ строки.
-
-    Если as_separator=True, префикс в середине ответа работает как !separate:
-    всё, что было до него, уходит отдельным сообщением, а не склеивается в одно.
-    Строки внутри блоков кода не трогаем.
-    """
     if not text:
         return text
     out: list[str] = []
@@ -1300,13 +1431,10 @@ EMOJI_RE = re.compile(
     "]+",
     flags=re.UNICODE,
 )
-# Разрешённые эмодзи в режиме кента (только эти).
 _KENT_ALLOWED_EMOJI = ("🍷", "🗿")
 
 
 def strip_chat_emojis(text: str) -> str:
-    """Мягко чистит эмодзи в режиме кента, оставляя только 🍷 и 🗿.
-    Используется как страховка, если модель всё равно пересолила со смайлами."""
     if not text:
         return text
 
@@ -1330,7 +1458,6 @@ def extract_reaction_and_why(text: str) -> tuple[str, str | None, str | None]:
     emojis: str | None = None
     why: str | None = None
     if react_match:
-        # REACT_PATTERN может вернуть одну из двух групп (см. шаблон).
         emojis = (react_match.group(1) or (react_match.group(2) if react_match.lastindex and react_match.lastindex >= 2 else None) or "").strip() or None
     if why_match:
         why = why_match.group(1).strip()
@@ -1370,8 +1497,6 @@ def split_emojis(emojis: str) -> list[str]:
 def clean_extra_text(raw: str) -> list[str]:
     if not raw:
         return []
-    # Нормализуем типографику сразу — тут обычно мелкие вставки от ИИ,
-    # код в них маловероятен, но normalize_typography всё равно бережёт блоки.
     raw = normalize_typography(raw)
     cleaned, _, _ = extract_utility_markers(raw)
     cleaned = SEPARATOR_PATTERN.sub(' ', cleaned)
@@ -1382,9 +1507,6 @@ def clean_extra_text(raw: str) -> list[str]:
     return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
 
 
-# ============================================================
-# STICKERS / GIFS
-# ============================================================
 STICKER_POOL = [
     "CAACAgEAAxkBAAEXkj1qd6YOMXAHLciofztbliRFn-qf5gACvAIAAmIaIUTfm-IZfGZGmj0E",
     "CAACAgEAAxkBAAEXkj9qd6YSbqnaV0Cy2lJdQZxWgfdYNAACCQIAAvGaoUbqHGwx5EW7xT0E",
@@ -1566,7 +1688,7 @@ def check_all_syntax(repo_path: str) -> list[str]:
     errors: list[str] = []
     try:
         for root, _dirs, files in os.walk(repo_path):
-            if '.git' in root.split(os.sep):
+            if '.git' in root.split(os.sep) or f'{os.sep}data{os.sep}' in root + os.sep:
                 continue
             for fname in files:
                 if not fname.endswith('.py'):
@@ -1646,7 +1768,82 @@ def find_entry_file(repo_path: str) -> str | None:
     return None
 
 
+# Файлы состояния, которые нельзя затирать при git reset --hard.
+_STATE_FILE_PATHS: tuple[str, ...] = (
+    USER_CONFIGS_FILE, MEMORY_FILE, CREDITS_FILE, DONATIONS_FILE,
+    DS_SCOPES_FILE, TRUSTED_CHATS_FILE, PREMIUM_STATE_FILE,
+    BALANCES_FILE, DA_PROCESSED_FILE, TICKETS_FILE, DA_TOKEN_FILE,
+    PROMO_FILE, ADMIN_USERS_FILE, BLOCK_FILE, ADMIN_REQUESTS_FILE,
+    CLOUD_MIGRATED_FILE,
+)
+
+
+def _backup_state_to_tmp() -> dict[str, str]:
+    """Копирует все JSON-состояния во временную директорию. Возвращает {orig: backup}."""
+    bdir = tempfile.mkdtemp(prefix="kulsh_state_")
+    out: dict[str, str] = {}
+    for path in _STATE_FILE_PATHS:
+        if os.path.isfile(path):
+            try:
+                dst = os.path.join(bdir, os.path.basename(path))
+                shutil.copy2(path, dst)
+                out[path] = dst
+            except Exception as e:
+                logger.warning(f"backup {path}: {e}")
+    return out
+
+
+def _restore_state_from_backup(mapping: dict[str, str]) -> None:
+    """Восстанавливает файлы состояния, если их нет или они отличаются от бэкапа."""
+    for orig, bak in mapping.items():
+        if not os.path.isfile(bak):
+            continue
+        try:
+            if not os.path.isfile(orig):
+                shutil.copy2(bak, orig)
+                logger.info(f"restored (missing): {orig}")
+                continue
+            with open(bak, 'rb') as f1, open(orig, 'rb') as f2:
+                if f1.read() != f2.read():
+                    shutil.copy2(bak, orig)
+                    logger.info(f"restored (changed): {orig}")
+        except Exception as e:
+            logger.warning(f"restore {orig}: {e}")
+
+
+def _cleanup_backup(mapping: dict[str, str]) -> None:
+    if not mapping:
+        return
+    dirs: set[str] = set()
+    for bak in mapping.values():
+        dirs.add(os.path.dirname(bak))
+        try:
+            os.unlink(bak)
+        except Exception:
+            pass
+    for d in dirs:
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+
+
 async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
+    # 1. Сохраняем всё состояние и делаем бэкап ДО любых git-операций.
+    try:
+        save_all_state()
+    except Exception as e:
+        logger.warning(f"save before update: {e}")
+    backup = _backup_state_to_tmp()
+    try:
+        return await _perform_safe_git_update_inner(repo_path, backup)
+    finally:
+        _cleanup_backup(backup)
+
+
+async def _perform_safe_git_update_inner(
+    repo_path: str, backup: dict[str, str],
+) -> tuple[str, str]:
     rc, out, err = run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
     if rc != 0 or not out.strip():
         return "error", f"git rev-parse: {err or out or 'unknown error'}"
@@ -1663,6 +1860,9 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
         pull_out += "\n" + (out2 or "") + (err2 or "")
         if rc2 != 0:
             return "error", f"git pull fail:\n{pull_out[:1500]}"
+
+    # После pull восстанавливаем файлы состояния на случай, если они были в репе.
+    _restore_state_from_backup(backup)
 
     if "Already up to date" in pull_out or "Already up-to-date" in pull_out:
         return "up_to_date", pull_out
@@ -1684,6 +1884,8 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
             if rc_reset != 0:
                 tried_errors.append(f"шаг {step}: git reset --hard fail: {err_r or out_r or 'unknown'}")
                 continue
+            # После reset --hard восстанавливаем файлы состояния из бэкапа.
+            _restore_state_from_backup(backup)
 
         syntax_errors = check_all_syntax(repo_path)
         if syntax_errors:
@@ -1715,6 +1917,7 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
 
     if prev_hash:
         run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
+        _restore_state_from_backup(backup)
     return "error", (
         f"ни один из последних коммитов (включая откат на {MAX_BACK_STEPS}) не прошёл smoke-проверку. "
         f"Вернул рабочее дерево на {prev_hash[:7]}.\n\n"
@@ -1726,6 +1929,7 @@ try:
     load_user_configs()
     load_ds_scopes()
     logger.info(f"✅ Загружено настроек пользователей: {len(user_configs)}, DS-scope: {len(ds_config_scope)}")
+    logger.info(f"📁 DATA_DIR: {DATA_DIR}")
 except Exception as e:
     logger.warning(f"load на старте: {e}")
 

@@ -62,6 +62,7 @@ from src.ui import (
 )
 from src.util import (
     BOT_VERSION,
+    BOT_LOG_FILE,
     COMMUNICATION_MODES,
     DAILY_CREDITS,
     DONATE_URL,
@@ -86,6 +87,7 @@ from src.util import (
     scrub_stray_markers,
     split_emojis,
     strip_chat_emojis,
+    strip_chat_punctuation,
     tr,
     tg_msg,
     add_bot_memory,
@@ -225,7 +227,6 @@ async def _handle_reaction_markers(
 # ============================================================
 async def _edit_config_message(chat_id: int, message_id: int,
                                 text: str, kb: InlineKeyboardMarkup) -> bool:
-    """Универсально редактирует сообщение настроек: rich → HTML → plain."""
     ok = await edit_rich_message(chat_id, message_id, text, reply_markup=kb)
     if ok:
         return True
@@ -256,7 +257,6 @@ async def edit_or_send(call: types.CallbackQuery, text: str, kb: InlineKeyboardM
 
 
 async def dismiss_ui_flow(chat_id: int, user_id: int, bot_message_id: int, *, keep_bot: bool = False) -> None:
-    """Удаляет экран, команду, которая его открыла, и всё, что к нему приложилось."""
     rec = take_ui_flow(bot_message_id) or {}
     origin = rec.get("origin_id")
     extras = rec.get("extra") if isinstance(rec.get("extra"), list) else []
@@ -297,21 +297,47 @@ def _move_ui_flow(old_id: int, new_id: int | None) -> None:
 # ============================================================
 # CALLBACK HANDLER (cfg:)
 # ============================================================
+def _parse_cfg_callback(data: str) -> tuple[int | None, str, list[str]]:
+    """Разбирает callback_data кнопок настроек.
+
+    Новый формат (с owner): cfg:<owner_id>:<action>[:<arg1>][:<arg2>]
+    Старый формат (без owner): cfg:<action>[:<arg1>][:<arg2>]
+
+    Возвращает (owner_id или None, action, [arg1, arg2, ...]).
+    """
+    parts = data.split(":")
+    if len(parts) >= 3 and parts[1].isdigit():
+        return int(parts[1]), parts[2], parts[3:]
+    return None, (parts[1] if len(parts) > 1 else ""), parts[2:]
+
+
 async def handle_cfg_callback(call: types.CallbackQuery) -> None:
     msg = tg_msg(call)
     data = call.data or ""
-    owner = config_msg_owners.get(msg.message_id)
-    if owner is not None and owner != call.from_user.id:
-        l = get_user_config("tg", msg.chat.id, call.from_user.id).get("language", "ru")
-        await tg_bot.answer_callback_query(cb_id(call), tr(l, "cfg_not_yours"), show_alert=False)
-        return
-
     chat_id = msg.chat.id
     user_id = call.from_user.id
+
+    owner_from_cb, action, extra = _parse_cfg_callback(data)
+
+    # Определяем владельца сообщения настроек.
+    owner: int | None = owner_from_cb
+    if owner is None:
+        # Старый формат callback_data — фолбэк на память процесса.
+        # Ключ (chat_id, message_id), а не просто message_id — иначе сообщения
+        # из разных чатов с одинаковым id перетирают owner друг другу.
+        owner = config_msg_owners.get((chat_id, msg.message_id))
+    if owner is None:
+        # Не знаем, чьё это сообщение — отказываем.
+        lang_fallback = get_user_config("tg", chat_id, user_id).get("language", "ru")
+        await tg_bot.answer_callback_query(cb_id(call), tr(lang_fallback, "cfg_not_yours"), show_alert=False)
+        return
+    if owner != user_id:
+        lang_fallback = get_user_config("tg", chat_id, user_id).get("language", "ru")
+        await tg_bot.answer_callback_query(cb_id(call), tr(lang_fallback, "cfg_not_yours"), show_alert=False)
+        return
+
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
-    parts = data.split(":")
-    action = parts[1] if len(parts) > 1 else ""
     toast = tr(lang, "cfg_updated")
     is_private = (msg.chat.type == 'private')
 
@@ -322,7 +348,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "mode_set":
-        value = parts[2] if len(parts) > 2 else "kent"
+        value = extra[0] if extra else "kent"
         if value == "pro" and not is_private:
             await tg_bot.answer_callback_query(cb_id(call), tr(lang, "mode_need_dm"), show_alert=True)
             return
@@ -341,7 +367,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "model_set":
-        value = parts[2] if len(parts) > 2 else "auto"
+        value = extra[0] if extra else "auto"
         if value == "auto":
             cfg["model"] = None
             toast = tr(lang, "cfg_model_auto")
@@ -367,8 +393,8 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
 
     if action == "model_co":
         try:
-            company_index = int(parts[2]) if len(parts) > 2 else 0
-        except ValueError:
+            company_index = int(extra[0]) if extra else 0
+        except (ValueError, IndexError):
             company_index = 0
         await edit_or_send(call, model_picker_text("tg", chat_id, user_id, company_index),
                             build_model_keyboard("tg", chat_id, user_id, company_index))
@@ -387,7 +413,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "lang_set":
-        val = parts[2] if len(parts) > 2 else "ru"
+        val = extra[0] if extra else "ru"
         if val in ("ru", "en"):
             cfg["language"] = val
             lang = val
@@ -404,7 +430,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "theme_set":
-        val = parts[2] if len(parts) > 2 else "dark"
+        val = extra[0] if extra else "dark"
         if val in ("dark", "light"):
             cfg["theme"] = val
             toast = tr(lang, "cfg_theme_dark") if val == "dark" else tr(lang, "cfg_theme_light")
@@ -415,7 +441,6 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "temp" or action == "temp_set":
-        # Температура убрана из настроек.
         await tg_bot.answer_callback_query(cb_id(call))
         return
 
@@ -435,7 +460,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "apply":
-        config_msg_owners.pop(msg.message_id, None)
+        config_msg_owners.pop((chat_id, msg.message_id), None)
         await dismiss_ui_flow(chat_id, user_id, msg.message_id, keep_bot=True)
         save_user_configs()
         await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_done"))
@@ -492,7 +517,6 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         last_random_reply.pop(chat_key, None)
         last_old_reply.pop(chat_key, None)
         toast = tr(lang, "cfg_memory_reset")
-        # Текст настроек не меняется — не трогаем сообщение, чтобы не слетало форматирование.
         await tg_bot.answer_callback_query(cb_id(call), toast)
         return
 
@@ -560,11 +584,13 @@ async def handle_menu_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "settings":
+        # Открыть настройки с этого меню. Кнопка "Настройки" в меню открывает
+        # СВОИ настройки тому, кто её нажал. Все cfg-кнопки будут нести owner = user_id.
         cfg_text = config_text("tg", chat_id, user_id)
         kb = build_main_config_keyboard("tg", chat_id, user_id)
         ok = await _edit_config_message(chat_id, msg.message_id, cfg_text, kb)
         if ok:
-            config_msg_owners[msg.message_id] = user_id
+            config_msg_owners[(chat_id, msg.message_id)] = user_id
         await tg_bot.answer_callback_query(cb_id(call))
         return
 
@@ -810,7 +836,7 @@ async def handle_toggle_premium(message: types.Message) -> None:
     if message.from_user is None or message.from_user.id != PREMIUM_ADMIN_ID:
         await reply_tg_html(message, "⛔ Нет доступа.")
         return
-    state.premium_functions_enabled = not state.premium_functions_enabled
+    state.set_premium_functions_enabled(not state.premium_functions_enabled)
     label = "включены ✅" if state.premium_functions_enabled else "выключены ❌"
     await reply_tg_html(message, f"Расширенные функции: {label}")
 
@@ -869,17 +895,16 @@ async def tg_handle_config(message: types.Message) -> None:
         chat_id, cfg_text, reply_to=message.message_id, reply_markup=kb,
     )
     if mid is not None:
-        config_msg_owners[mid] = user_id
+        config_msg_owners[(chat_id, mid)] = user_id
         bind_ui_flow(mid, chat_id, user_id, origin_id=message.message_id)
     else:
-        # fallback plain
         try:
             msg = await tg_bot.send_message(
                 chat_id, re.sub(r'<[^>]+>', '', markdown_like_to_telegram_html(cfg_text)),
                 reply_markup=kb, reply_to_message_id=message.message_id,
             )
             fallback_id = getattr(msg, "message_id", 0)
-            config_msg_owners[fallback_id] = user_id
+            config_msg_owners[(chat_id, fallback_id)] = user_id
             bind_ui_flow(fallback_id, chat_id, user_id, origin_id=message.message_id)
         except Exception as e:
             logger.error(f"Config fallback fail: {e}")
@@ -1231,7 +1256,6 @@ def _host_of(url: str) -> str:
 
 
 async def search_with_anim_tg(chat_id: int, reply_to: int | None, query: str) -> list[Any]:
-    """Показывает анимацию поиска, возвращает результаты и убирает сообщение."""
     status = None
     try:
         status = await tg_bot.send_message(chat_id, "🗿 поиск в интернете...", reply_to_message_id=reply_to)
@@ -1272,10 +1296,8 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
 
     orig_user_text = (user_text or (message.text or message.caption or "")).strip()
 
-    # !react / !why — до всего
     answer_raw, _applied_reactions = await _handle_reaction_markers(message, chat_id, user_id, answer_raw or "", cfg)
 
-    # !search
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
         if query:
@@ -1293,7 +1315,6 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
             else:
                 answer_raw = tr(lang, "search_nothing")
 
-    # !recall_media (ID или последнее)
     rm_id: int | None = None
     rm_match = re.search(r'!\s*recall[\s_]*media\s*:?\s*(\d+)', answer_raw or "", re.IGNORECASE)
     if rm_match:
@@ -1339,7 +1360,6 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
         if rm_id is not None:
             answer_raw = re.sub(r'!\s*recall[\s_]*media\s*:?\s*\d+', ' ', answer_raw, flags=re.IGNORECASE)
 
-    # !group_info / !user_info
     gi = UTILITY_PATTERNS["group_info"].search(answer_raw or "")
     ui = UTILITY_PATTERNS["user_info"].search(answer_raw or "")
     if gi:
@@ -1372,7 +1392,6 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
             follow_prompt = "Не удалось получить инфо о пользователе. Скажи об этом."
         answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg")
 
-    # !chart
     if state.premium_functions_enabled:
         chart_spec, remaining = extract_chart_marker(answer_raw or "")
         if chart_spec:
@@ -1395,7 +1414,6 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
             if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
 
-    # ---- draw / term ----
     draw_png = None
     draw_before = ""
     draw_after = ""
@@ -1408,7 +1426,6 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
         except Exception as e:
             logger.error(f"tg draw: {e}")
 
-    # Разбиение на сегменты
     clean_segments, markers = process_ai_response(
         draw_before if draw_png is not None else answer_raw,
         separate_enabled=separate_enabled,
@@ -1446,6 +1463,7 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
         seg = scrub_stray_markers(seg)
         if cfg.get("communication_mode", "kent") == "kent":
             seg = strip_chat_emojis(seg)
+            seg = strip_chat_punctuation(seg)
         if not seg:
             return
         try:
@@ -1485,6 +1503,7 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
             caption = scrub_stray_markers(after_segments[0])
             if cfg.get("communication_mode", "kent") == "kent":
                 caption = strip_chat_emojis(caption)
+                caption = strip_chat_punctuation(caption)
             caption = caption[:1024]
         try:
             await tg_bot.send_photo(
@@ -1551,6 +1570,7 @@ async def maybe_reply_to_old_message_tg(message: types.Message, chat_id: int, us
                 seg = scrub_stray_markers(seg)
                 if cfg.get("communication_mode", "kent") == "kent":
                     seg = strip_chat_emojis(seg)
+                    seg = strip_chat_punctuation(seg)
                 if not seg:
                     continue
                 try:

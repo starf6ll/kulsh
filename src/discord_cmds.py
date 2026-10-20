@@ -43,6 +43,7 @@ from src.looks import (
 )
 from src.util import (
     BOT_VERSION,
+    BOT_LOG_FILE,
     DAILY_CREDITS,
     DONATE_URL,
     GITHUB_URL,
@@ -78,6 +79,7 @@ from src.util import (
     set_ds_scope,
     split_emojis,
     strip_chat_emojis,
+    strip_chat_punctuation,
     tr,
     AUTHORIZED_UPDATERS,
     GIF_POOL,
@@ -532,6 +534,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         seg = scrub_stray_markers(seg)
         if cfg.get("communication_mode", "kent") == "kent":
             seg = strip_chat_emojis(seg)
+            seg = strip_chat_punctuation(seg)
         if not seg:
             return
         try:
@@ -564,6 +567,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             caption = scrub_stray_markers(after_segments[0])
             if cfg.get("communication_mode", "kent") == "kent":
                 caption = strip_chat_emojis(caption)
+                caption = strip_chat_punctuation(caption)
             caption = caption[:1990]
         try:
             await message.reply(file=discord.File(fp=draw_png, filename="drawing.png"), content=caption or None)
@@ -1050,7 +1054,7 @@ class DsModelView(discord.ui.View):
             if m not in MODEL_LIST:
                 continue
             idx = MODEL_LIST.index(m)
-            label = model_display_name(m, self.lang) + (" 💳" if is_paid_model(m) else "")
+            label = model_display_name(m, lang) + (" 💳" if is_paid_model(m) else "")
             options.append(discord.SelectOption(
                 label=label[:100], value=str(idx), default=cur == m,
             ))
@@ -1858,7 +1862,7 @@ async def ds_slash_logs(interaction: discord.Interaction) -> None:
         intro = tr(lang, "ds_logs_content")
         content = f"{intro}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{intro}\n\n{tail[:1900]}"
         try:
-            await interaction.followup.send(content=content, file=discord.File('bot.log'), ephemeral=True)
+            await interaction.followup.send(content=content, file=discord.File(BOT_LOG_FILE), ephemeral=True)
         except FileNotFoundError:
             await interaction.followup.send(content=content, ephemeral=True)
     except Exception as e:

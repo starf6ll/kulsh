@@ -26,6 +26,7 @@ from src.util import (
     typed_decorator,
     logger,
     msk_datetime_str,
+    save_all_state,
 )
 
 if not AI_KEYS:
@@ -198,15 +199,6 @@ def register() -> None:
 
 
 def _smoke_check() -> None:  # pyright: ignore[reportUnusedFunction]
-    """
-    Runtime smoke-проверка. Вызывается safe_check_import() в subprocess после git pull.
-    Жёстко проверяем только то, без чего бот НЕ запустится:
-      - все функции telegram.*, rich.*, media.*, discord_cmds.*, discord_msg.on_message
-      - loops.bind
-    Опциональные loop-функции (random_post_loop, series_reminder_loop,
-    donation_alerts_listener, periodic_config_save_loop) проверяются мягко —
-    main() обращается к ним через getattr(..., None) с fallback.
-    """
     def _need(mod: Any, name: str) -> None:
         obj = getattr(mod, name, None)
         if obj is None:
@@ -214,25 +206,20 @@ def _smoke_check() -> None:  # pyright: ignore[reportUnusedFunction]
         if not callable(obj):
             raise RuntimeError(f"{getattr(mod, '__name__', '?')}.{name} — не callable")
 
-    # telegram
     for name in ("bind", "handle_start", "handle_menu", "handle_help", "handle_status",
                  "handle_donate", "handle_donate_stars", "handle_credits",
                  "handle_toggle_premium", "handle_pre_checkout", "handle_successful_payment",
                  "handle_cfg_callback", "handle_menu_callback"):
         _need(telegram, name)
 
-    # rich
     for name in ("bind", "send_tg_html", "reply_tg_html", "send_formatted", "send_rich_message"):
         _need(rich, name)
 
-    # media
     for name in ("handle_tg_media", "handle_tg_text"):
         _need(media, name)
 
-    # discord_msg
     _need(discord_msg, "on_message")
 
-    # discord_cmds
     for name in ("bind", "ds_slash_start", "ds_slash_menu", "ds_slash_help", "ds_slash_status",
                  "ds_slash_donate", "ds_slash_credits", "ds_slash_config", "ds_slash_logs",
                  "ds_slash_groupinfo", "ds_slash_userinfo", "ds_slash_avatar", "ds_slash_recall",
@@ -240,10 +227,8 @@ def _smoke_check() -> None:  # pyright: ignore[reportUnusedFunction]
                  "ds_slash_femboy", "ds_slash_femboy_battle"):
         _need(discord_cmds, name)
 
-    # loops.bind — критичен, вызывается в bind_all на старте модуля
     _need(loops, "bind")
 
-    # Опциональные циклы — только warn, не падаем
     for optional_name in ("random_post_loop", "series_reminder_loop",
                           "donation_alerts_listener", "periodic_config_save_loop"):
         if getattr(loops, optional_name, None) is None:
@@ -253,7 +238,6 @@ def _smoke_check() -> None:  # pyright: ignore[reportUnusedFunction]
 async def main() -> None:
     register()
 
-    # Переносим старые локальные балансы в общую базу сайта (один раз).
     try:
         from src import cloud
         if cloud.enabled():
@@ -279,13 +263,11 @@ async def main() -> None:
         logger.info(f"Discord {ds_bot.user} запущен, discord.py {discord.__version__}")
         if not voice_recognition_enabled:
             logger.info("ℹ️ Распознавание голоса отключено")
-        # Глобальная синхронизация — команды видны во ВСЕХ серверах, где есть бот.
         try:
             synced = await ds_tree.sync()
             logger.info(f"Синхронизировано slash-команд (глобально): {len(synced)}")
         except Exception as e:
             logger.error(f"Не удалось синхронизировать slash-команды (global): {e}")
-        # Мгновенная синхронизация в основной гильдии (global-схема расходится до ~1 часа).
         if DS_ALLOWED_GUILD_ID:
             try:
                 guild = discord.Object(id=DS_ALLOWED_GUILD_ID)
@@ -356,6 +338,14 @@ def run() -> None:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    finally:
+        # При выходе обязательно сохраняем всё состояние на диск,
+        # чтобы не терять настройки при рестартах.
+        try:
+            save_all_state()
+            logger.info("💾 Состояние сохранено перед выходом")
+        except Exception as e:
+            logger.warning(f"save on exit: {e}")
 
 
 if __name__ == "__main__":

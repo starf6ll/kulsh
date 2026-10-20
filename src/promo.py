@@ -14,9 +14,8 @@ from typing import Any
 
 from src import cloud
 from src.billing import add_credit, get_balance, set_topup_bonus
-from src.util import logger
+from src.util import logger, PROMO_FILE
 
-PROMO_FILE = "promocodes.json"
 CODE_RE = re.compile(r"^[A-Z0-9_-]{3,24}$")
 
 _cache: dict[str, dict[str, Any]] = {}

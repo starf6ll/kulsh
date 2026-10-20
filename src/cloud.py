@@ -34,7 +34,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
-from src.util import logger
+from src.util import logger, CLOUD_MIGRATED_FILE
 
 CLOUD_URL = (os.getenv("KV_REST_API_URL") or os.getenv("UPSTASH_REDIS_REST_URL") or "").rstrip("/")
 CLOUD_TOKEN = os.getenv("KV_REST_API_TOKEN") or os.getenv("UPSTASH_REDIS_REST_TOKEN") or ""
@@ -606,7 +606,9 @@ def promo_use_count(code: str) -> int:
 # ============================================================
 # MIGRATION OF THE OLD LOCAL balances.json
 # ============================================================
-MIGRATED_FILE = "cloud_migrated.json"
+# Путь вынесен в util (data/cloud_migrated.json), чтобы маркер миграции
+# не сбрасывался при git pull / reset --hard.
+MIGRATED_FILE = CLOUD_MIGRATED_FILE
 
 
 def migrate_legacy(balances: dict[str, Any]) -> None:

@@ -1,6 +1,6 @@
 # Kulsh GPT | v2.48.0
 # by (main author): starfall-apk
-# coauthor & bot hosting: pomidorko1515
+# coauthor & bot hosting: pomidorka1515
 
 """Balance, DonationAlerts top-ups, support tickets and profile data."""
 
@@ -19,13 +19,12 @@ from src.util import (
     DONATIONALERTS_TOKEN,
     JsonDict,
     logger,
+    BALANCES_FILE,
+    DA_PROCESSED_FILE,
+    TICKETS_FILE,
+    DA_TOKEN_FILE,
 )
 from src import cloud
-
-BALANCES_FILE = 'balances.json'
-DONATIONS_FILE = 'da_processed.json'
-TICKETS_FILE = 'support_tickets.json'
-DA_TOKEN_FILE = 'da_token.json'
 
 DONATIONALERTS_API = "https://www.donationalerts.com/api/v1"
 DONATIONALERTS_OAUTH = "https://www.donationalerts.com/oauth/token"
@@ -33,7 +32,6 @@ MIN_TOPUP_RUB = float(os.getenv("DONATIONALERTS_MIN_TOPUP") or "1")
 TOPUP_CURRENCY = os.getenv("DONATIONALERTS_CURRENCY") or "RUB"
 DONATIONALERTS_PAGE = os.getenv("DONATIONALERTS_PAGE") or ""
 
-# Ссылки на юридические документы (публикуются через telegra.ph).
 TERMS_URL = os.getenv("KULSH_TERMS_URL") or "https://telegra.ph/Kulsh-AI--Polzovatelskoe-soglashenie-10-17"
 PRIVACY_URL = os.getenv("KULSH_PRIVACY_URL") or "https://telegra.ph/Kulsh-AI--Politika-konfidencialnosti-10-17-2"
 
@@ -60,7 +58,7 @@ def _save(path: str, data: Any) -> None:
 
 
 balances: dict[str, JsonDict] = _load(BALANCES_FILE, {})
-_processed_donations: set[int] = set(int(x) for x in _load(DONATIONS_FILE, []))
+_processed_donations: set[int] = set(int(x) for x in _load(DA_PROCESSED_FILE, []))
 tickets: JsonDict = _load(TICKETS_FILE, {"next_id": 1, "items": {}, "admin_map": {}})
 tickets.setdefault("next_id", 1)
 tickets.setdefault("items", {})
@@ -287,7 +285,6 @@ async def poll_donations_once() -> list[tuple[str, int, float, str]]:
         if amount <= 0:
             continue
 
-        # Код содержит числовой id. Сначала смотрим, к какому аккаунту он привязан.
         platform = "tg"
         if cloud.enabled():
             if cloud.identity_exists("tg", user_id):
@@ -308,7 +305,7 @@ async def poll_donations_once() -> list[tuple[str, int, float, str]]:
         logger.info(f"💰 Донат {amount:.2f} ₽ → {platform}_{user_id} (#{donation_id})")
 
     if changed:
-        _save(DONATIONS_FILE, sorted(_processed_donations))
+        _save(DA_PROCESSED_FILE, sorted(_processed_donations))
     return credited
 
 
