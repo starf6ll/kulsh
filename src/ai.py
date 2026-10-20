@@ -44,6 +44,9 @@ from src.util import (
     model_cost_rub,
     is_paid_model,
     model_display_name,
+    AUTO_ORDER_FREE,
+    AUTO_ORDER_PAID,
+    NO_VISION_MODELS,
 )
 from src.billing import charge_balance, get_balance, has_balance_for_paid
 
@@ -167,8 +170,11 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     )
 
     keyboard_line = (
-        "КЛАВИАТУРА: как обычный человек, можешь писать английские слова и ники кириллицей (транслит), "
-        "ставить обычные кавычки \"\" вместо «», и дефис - вместо длинного тире — будто тебе лень тянуться. "
+        "КЛАВИАТУРА И ТИПОГРАФИКА (обязательно к исполнению): пиши обычные кавычки \"\" вместо «», "
+        "„“ и любых других фигурных кавычек; обычный дефис - вместо длинного тире — и –. "
+        "Ты будто лень тянуться к таблице символов — используй то, что под рукой на клавиатуре. "
+        "Это правило строже красоты текста: типографские символы всегда заменяй на клавиатурные. "
+        "Английские слова и ники можно писать кириллицей (транслит), если так короче. "
     )
 
     github_line = (
@@ -249,13 +255,13 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
         parts.append(
             "Ты — Кульш, современная опенсорс языковая модель ИИ. Режим: Ассистент. Помогаешь структурированно, "
             "по делу, используешь заголовки и списки где уместно, но остаёшься дружелюбным. "
-            + no_censorship_line + time_ban_line + github_line + secrecy_line + "\n"
+            + no_censorship_line + time_ban_line + keyboard_line + github_line + secrecy_line + "\n"
         )
     else:  # pro
         parts.append(
             "Ты — Кульш, современная опенсорс языковая модель ИИ. Режим: Pro. Думай перед ответом, разбивай "
             "сложное на шаги, перепроверяй логику и факты. "
-            + no_censorship_line + time_ban_line + github_line + secrecy_line + "\n"
+            + no_censorship_line + time_ban_line + keyboard_line + github_line + secrecy_line + "\n"
         )
 
     if cfg.get("separate_enabled", True):
@@ -383,6 +389,8 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "отвечай строчными буквами, коротко, по-человечески, без канцелярита и без устаревшего сленга; "
             "никаких эмодзи кроме 🍷🗿 (и то редко); никогда не начинай сообщение или новую строку со времени, "
             "даты или пометки '(только что)'; "
+            "ВСЕГДА ставь обычный дефис - вместо тире — и –, и обычные кавычки \"\" вместо «» и любых "
+            "других типографских кавычек, будто тебе лень искать символы; "
         )
         if cfg.get("separate_enabled", True):
             tail += "разные мысли разделяй маркером !separate в одной строке, НЕ переносами строк."
@@ -517,6 +525,124 @@ async def _ask_openai_chat(
         return reasoning, usage
     logger.error(f"   {provider}: пустой content")
     return None, usage
+
+
+# ============================================================
+# УМНЫЙ ВЫБОР МОДЕЛИ
+# ------------------------------------------------------------
+# Лёгкий роутер на glm-5.3-flash смотрит на запрос и определяет
+# сложность. Для простой болтовни первыми идём glm/deepseek-flash,
+# для сложных задач — claude-haiku / gpt-6.1-sol. Роутер никогда не
+# блокирует: если он упал — берём medium и полный список.
+# ============================================================
+ROUTER_MODEL = "glm-5.3-flash"
+ROUTER_SYSTEM = "Ты — классификатор. Отвечай ровно одним словом."
+
+# Порог баланса, ниже которого платные модели не пробуем даже при paid_ok.
+MIN_PAID_BALANCE = 1.0
+
+
+def _last_user_text(contents: list[dict[str, Any]]) -> str:
+    """Возвращает текст последнего user-сообщения из contents."""
+    for item in reversed(contents):
+        if item.get("role") != "user":
+            continue
+        parts = item.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for p in cast(list[Any], parts):
+            if isinstance(p, dict) and isinstance(p.get("text"), str) and p["text"]:
+                return str(p["text"])
+    return ""
+
+
+async def _route_complexity(prompt: str) -> str:
+    """Возвращает 'easy' | 'medium' | 'hard'. При любой ошибке — 'medium'."""
+    if not prompt or not DARKAPI_API_KEY:
+        return "medium"
+    text = prompt.strip()[:1500]
+    if not text:
+        return "medium"
+    router_prompt = (
+        f"Классифицируй задачу пользователя по сложности:\n\n{text}\n\n"
+        "Ответь ровно одним словом из списка:\n"
+        "- easy — болтовня, приветствие, короткий факт, шутка, простой бытовой вопрос\n"
+        "- medium — объяснение, совет, короткий код, разбор небольшого текста\n"
+        "- hard — сложный код, длинный анализ, творческая задача, глубокие рассуждения, "
+        "большой объём работы\n\n"
+        "Только одно слово, без пояснений."
+    )
+    try:
+        answer, _ = await _ask_openai_chat(
+            "darkapi", DARKAPI_URL, DARKAPI_API_KEY, ROUTER_MODEL,
+            [
+                {"role": "system", "content": ROUTER_SYSTEM},
+                {"role": "user", "content": router_prompt},
+            ],
+            0.05,
+        )
+        if answer:
+            word = answer.strip().lower().split()[0] if answer.strip() else ""
+            word = re.sub(r'[^a-z]', '', word)
+            if word in ("easy", "medium", "hard"):
+                return word
+    except Exception as e:
+        logger.debug(f"router fail: {e}")
+    return "medium"
+
+
+async def _pick_auto_models(
+    has_image: bool,
+    prompt: str,
+    paid_ok: bool,
+    platform: str,
+    user_id: int | None,
+    context_type: str | None,
+) -> list[str]:
+    """Собирает список моделей для авто-перебора под сложность и баланс."""
+    free_pool = [m for m in AUTO_ORDER_FREE if m in MODEL_LIST]
+    paid_pool = [m for m in AUTO_ORDER_PAID if m in MODEL_LIST]
+
+    if has_image:
+        free_pool = [m for m in free_pool if m not in NO_VISION_MODELS]
+        paid_pool = [m for m in paid_pool if m not in NO_VISION_MODELS]
+
+    # Баланс: если денег мало — платные не пробуем даже при paid_ok.
+    if not paid_ok:
+        paid_pool = []
+    elif user_id is not None:
+        try:
+            balance = get_balance(platform, user_id)
+        except Exception:
+            balance = 0.0
+        if balance < MIN_PAID_BALANCE:
+            paid_pool = []
+
+    # Тривиальные контексты — не тратим запрос на роутер.
+    trivial = context_type in ("random", "caption", "observer")
+
+    complexity = "easy" if trivial else "medium"
+    if not trivial:
+        complexity = await _route_complexity(prompt)
+
+    if complexity == "easy":
+        # Стартовый короткий список: первая линия + остальные free,
+        # чтобы не лезть сразу в тяжёлые модели.
+        quick = [m for m in ("glm-5.3-flash", "deepseek-v4.1-flash") if m in free_pool]
+        if not quick:
+            quick = free_pool[:2]
+        models = quick + [m for m in free_pool if m not in quick]
+    elif complexity == "hard":
+        # Для сложных задач пробуем сначала крупные бесплатные, потом остальные.
+        priority = ["claude-haiku-5-5", "gpt-6.1-sol", "gpt-6-luna",
+                    "glm-5.3-flash", "deepseek-v4.1-flash"]
+        models = [m for m in priority if m in free_pool]
+        models += [m for m in free_pool if m not in models]
+    else:
+        models = list(free_pool)
+
+    models += paid_pool
+    return models
 
 
 # ============================================================
@@ -685,16 +811,29 @@ async def ask_ai_async(
         if no_fallback:
             # Служебные задачи (память и т.п.) — без перебора всего списка
             # и никогда не на платной модели при нулевом балансе.
-            free_models = [m for m in MODEL_LIST if not is_paid_model(m)]
-            models_to_try.append((free_models or MODEL_LIST)[0])
-        else:
-            logger.info("🎲 Модель не выбрана — авто-перебор по списку")
-            for m in MODEL_LIST:
-                if is_paid_model(m) and not paid_ok:
-                    continue
-                models_to_try.append(m)
+            for m in AUTO_ORDER_FREE:
+                if m in MODEL_LIST:
+                    models_to_try.append(m)
+                    break
             if not models_to_try:
-                models_to_try.append(MODEL_LIST[0])
+                models_to_try.append(MEMORY_MODEL)
+        else:
+            has_image = bool(image_bytes) or bool(image_bytes_list)
+            router_hint = prompt if prompt else _last_user_text(contents)
+            models_to_try = await _pick_auto_models(
+                has_image=has_image,
+                prompt=router_hint or "",
+                paid_ok=paid_ok,
+                platform=platform,
+                user_id=user_id,
+                context_type=context_type,
+            )
+            if not models_to_try:
+                models_to_try.append(MEMORY_MODEL)
+            logger.info(
+                f"🎲 Авто-выбор: {models_to_try[:4]}"
+                + (" +paid" if any(is_paid_model(m) for m in models_to_try) else "")
+            )
 
     gemini_models = [
         m for m in models_to_try

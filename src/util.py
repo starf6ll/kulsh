@@ -240,6 +240,49 @@ MODEL_GROUPS = [(company, models) for company, models in MODEL_GROUPS if models]
 
 MODEL_LIST = [m for _company, _models in MODEL_GROUPS for m in _models]
 
+# ============================================================
+# АВТО-ПОРЯДОК МОДЕЛЕЙ (когда пользователь не выбрал конкретную)
+# ------------------------------------------------------------
+# Логика: сначала быстрые дешёвые чат-модели, потом остальные
+# бесплатные, потом Gemini 2.5 (в конце бесплатных), потом
+# DeepSeek V4 Pro (самая тяжёлая бесплатная, но БЕЗ vision),
+# и только затем платные по возрастанию цены.
+# NO_VISION_MODELS не пробуем, если в запросе есть картинка.
+# ============================================================
+AUTO_ORDER_FREE: list[str] = [
+    # 1. Быстрая первая линия — болтовня, приветствия, лёгкие вопросы
+    "glm-5.3-flash",
+    "deepseek-v4.1-flash",
+    # 2. Прочие бесплатные с vision, до Gemini 2.5
+    "kimi-k3",
+    "gpt-6-luna",
+    "claude-haiku-5-5",
+    "gpt-6.1-sol",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    # 3. Gemini 2.5 — последние среди бесплатных
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    # 4. DeepSeek V4 Pro — самая тяжёлая бесплатная (без vision!)
+    "deepseek-v4-pro",
+]
+
+# Платные — строго по возрастанию цены за input+output.
+AUTO_ORDER_PAID: list[str] = [
+    "grok-4.7",           # $0.2 / $1.0
+    "qwen3.8-max-0902",   # $0.2 / $1.0
+    "gpt-6-astra",        # $0.34 / $1.7
+    "claude-sonnet-5-5",  # $0.4 / $2.0
+    "claude-opus-5-5",    # $0.6 / $3.2
+    "claude-fable-5-1",   # $1.2 / $6.0
+]
+
+# Модели без поддержки изображений. Пропускаем их, если в запросе есть медиа.
+NO_VISION_MODELS: frozenset[str] = frozenset({"deepseek-v4-pro"})
+
 MODEL_DISPLAY: dict[str, str] = {
     "glm-5.3-flash": "🧊 GLM 5.3 Flash",
     "deepseek-v4.1-flash": "🐋 DeepSeek V4.1 Flash",
@@ -1118,10 +1161,57 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
     return clean_segments, markers
 
 
+# ============================================================
+# ТИПОГРАФИКА
+# ------------------------------------------------------------
+# Модель регулярно игнорирует просьбы в промпте писать дефис вместо
+# длинного тире и обычные кавычки вместо «ёлочек». Поэтому дополнительно
+# нормализуем текст пост-фактум. Блоки кода (```...```) и inline-code
+# (`...`) не трогаем — там символы могут быть осмысленными.
+# ============================================================
+_FENCE_SPLIT_RE = re.compile(r'(```[\s\S]*?```)')
+_INLINE_CODE_SPLIT_RE = re.compile(r'(`[^`\n]+`)')
+
+
+def normalize_typography(text: str) -> str:
+    """Заменяет типографские символы на клавиатурные в обычном тексте.
+    Блоки кода ``` ... ``` и inline-code `...` не изменяются."""
+    if not text:
+        return text
+    parts = _FENCE_SPLIT_RE.split(text)
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        # Нечётные индексы — это захваченные блоки ``` ... ```.
+        if i % 2 == 1:
+            out.append(part)
+            continue
+        # Внутри обычного текста выделяем inline-code и не трогаем его.
+        sub_parts = _INLINE_CODE_SPLIT_RE.split(part)
+        sub_out: list[str] = []
+        for j, sub in enumerate(sub_parts):
+            if j % 2 == 1:
+                sub_out.append(sub)
+                continue
+            # Длинное тире (em/en) → обычный дефис.
+            sub = re.sub(r'[—–]', '-', sub)
+            # «ёлочки», немецкие и типографские двойные кавычки → обычные ".
+            sub = sub.replace('«', '"').replace('»', '"')
+            sub = sub.replace('„', '"').replace('‟', '"')
+            sub = re.sub(r'[“”]', '"', sub)
+            # Одинарные «умные» кавычки → обычный апостроф.
+            sub = re.sub(r'[‘’‚‛]', "'", sub)
+            sub_out.append(sub)
+        out.append(''.join(sub_out))
+    return ''.join(out)
+
+
 def scrub_stray_markers(text: str) -> str:
     """Страховка: удаляет уцелевшие служебные маркеры и голые '!' перед буквами."""
     if not text:
         return text
+    # Сначала нормализуем типографику (тире, кавычки) — до всех regex,
+    # чтобы дальше работать с уже клавиатурными символами.
+    text = normalize_typography(text)
     pats = [
         SEPARATOR_PATTERN,
         REACT_STRICT_PATTERN,
@@ -1280,6 +1370,9 @@ def split_emojis(emojis: str) -> list[str]:
 def clean_extra_text(raw: str) -> list[str]:
     if not raw:
         return []
+    # Нормализуем типографику сразу — тут обычно мелкие вставки от ИИ,
+    # код в них маловероятен, но normalize_typography всё равно бережёт блоки.
+    raw = normalize_typography(raw)
     cleaned, _, _ = extract_utility_markers(raw)
     cleaned = SEPARATOR_PATTERN.sub(' ', cleaned)
     cleaned = REACT_STRICT_PATTERN.sub(' ', cleaned)
