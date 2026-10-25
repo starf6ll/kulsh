@@ -15,13 +15,10 @@ import aiohttp
 
 from src.util import (
     AI_KEYS,
-    DARKAPI_API_KEY,
-    DARKAPI_MODELS,
-    DARKAPI_URL,
+    ETAGEONE_API_KEY,
+    ETAGEONE_MODELS,
+    ETAGEONE_URL,
     MODEL_LIST,
-    NEUTRALBEATS_API_KEY,
-    NEUTRALBEATS_MODELS,
-    NEUTRALBEATS_URL,
     NO_SPLIT_MARKER,
     SearchHit,
     JsonDict,
@@ -261,7 +258,8 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     separate_line = (
         "РАЗБИВКА ОБЯЗАТЕЛЬНА. НЕ пиши простыню из 3-5 предложений одним сообщением. Одна мысль = одно короткое "
         "сообщение. Разделяй мысли маркером !separate в той же строке, вплотную к тексту, даже после ?! — "
-        "например «серьёзно?!separateда». Обычный ответ — 1-3 короткие реплики через !separate. "
+        "например «серьёзно?!separateда». Пиши именно '!separate' — с восклицательным знаком вплотную к слову; "
+        "варианты 'separate', 'sep' и '! separate' запрещены. Обычный ответ — 1-3 короткие реплики через !separate. "
         "Маркер пользователю не виден. Если чувствуешь, что собираешься написать больше 2 предложений подряд — "
         "СТОП, разбей через !separate. "
     )
@@ -345,8 +343,9 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "• 'слушай, я тут подумал!separateможет оно и к лучшему'\n"
             "• 'да ладно!separateсерьёзно?'\n"
             "Маркер идёт ПРЯМО между частями, в одной строке, БЕЗ переносов строк и пустых строк, не в начале "
-            "и не в конце, не дублируется подряд. Обычно 2-3 части; цельную короткую фразу из одного предложения "
-            "не дроби. В ЛИЧКЕ и в группах — одинаково активно.\n"
+            "и не в конце, не дублируется подряд. ПИШИ ИМЕННО '!separate' — с '!' вплотную к слову; голое "
+            "'separate' или '! separate' считается ошибкой. Обычно 2-3 части; цельную короткую фразу из одного "
+            "предложения не дроби. В ЛИЧКЕ и в группах — одинаково активно.\n"
             "ЗАПРЕЩЕНО разделять части символами переноса строки (Enter / Shift+Enter) или пустой строкой. "
             "Если чувствуешь, что хочется нажать Enter между двумя мыслями — вместо этого ставишь !separate "
             "в той же строке. Никаких '\\n\\n' между частями, только !separate.\n\n"
@@ -374,7 +373,10 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
 
     util_lines = [
         "УТИЛИТЫ. Ты можешь вызвать встроенные утилиты бота, написав служебный маркер. Эти маркеры НЕ видны "
-        "пользователю (бот их вырежет). Пиши их строго слитно, с ведущим '!'. ИСПОЛЬЗУЙ КАЖДЫЙ МАРКЕР НЕ БОЛЕЕ ОДНОГО РАЗА. "
+        "пользователю (бот их вырежет). КАЖДАЯ команда и каждый маркер ОБЯЗАТЕЛЬНО начинаются с восклицательного "
+        "знака '!', и он стоит ВПЛОТНУЮ к названию команды, без пробела: !separate, !draw, !react, !search. "
+        "Пиши '!separate', а НЕ 'separate', не 'sep', не '! separate' и не 'separate '. Это правило действует "
+        "ВСЕГДА и для ВСЕХ команд, без единого исключения. ИСПОЛЬЗУЙ КАЖДЫЙ МАРКЕР НЕ БОЛЕЕ ОДНОГО РАЗА. "
         "ЭТО ЕДИНСТВЕННЫЕ ДОСТУПНЫЕ УТИЛИТЫ — НЕ ПРИДУМЫВАЙ ДРУГИЕ КОМАНДЫ И МАРКЕРЫ, КОТОРЫХ ЗДЕСЬ НЕТ:\n",
         "• !avatar — посмотреть аватарку собеседника.\n",
         "• !recall_media — вспомнить последнее медиа в чате (без текста-прелюдии, просто маркер).\n",
@@ -465,7 +467,8 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "других типографских кавычек. "
         )
         if cfg.get("separate_enabled", True):
-            tail += "Разные мысли разделяй !separate в одной строке, НЕ переносами строк."
+            tail += ("Разные мысли разделяй !separate в одной строке, НЕ переносами строк. "
+                     "Всегда пиши команды с '!' вплотную, без пробела — '!separate', а не 'separate'.")
         else:
             tail += "Пиши одним сообщением."
         parts.append(tail)
@@ -597,9 +600,6 @@ async def _ask_openai_chat(
 # ============================================================
 # УМНЫЙ ВЫБОР МОДЕЛИ
 # ============================================================
-ROUTER_MODEL = "glm-5.3-flash"
-ROUTER_SYSTEM = "Ты — классификатор. Отвечай ровно одним словом."
-
 MIN_PAID_BALANCE = 1.0
 
 
@@ -614,40 +614,6 @@ def _last_user_text(contents: list[dict[str, Any]]) -> str:
             if isinstance(p, dict) and isinstance(p.get("text"), str) and p["text"]:
                 return str(p["text"])
     return ""
-
-
-async def _route_complexity(prompt: str) -> str:
-    if not prompt or not DARKAPI_API_KEY:
-        return "medium"
-    text = prompt.strip()[:1500]
-    if not text:
-        return "medium"
-    router_prompt = (
-        f"Классифицируй задачу пользователя по сложности:\n\n{text}\n\n"
-        "Ответь ровно одним словом из списка:\n"
-        "- easy — болтовня, приветствие, короткий факт, шутка, простой бытовой вопрос\n"
-        "- medium — объяснение, совет, короткий код, разбор небольшого текста\n"
-        "- hard — сложный код, длинный анализ, творческая задача, глубокие рассуждения, "
-        "большой объём работы\n\n"
-        "Только одно слово, без пояснений."
-    )
-    try:
-        answer, _ = await _ask_openai_chat(
-            "darkapi", DARKAPI_URL, DARKAPI_API_KEY, ROUTER_MODEL,
-            [
-                {"role": "system", "content": ROUTER_SYSTEM},
-                {"role": "user", "content": router_prompt},
-            ],
-            0.05,
-        )
-        if answer:
-            word = answer.strip().lower().split()[0] if answer.strip() else ""
-            word = re.sub(r'[^a-z]', '', word)
-            if word in ("easy", "medium", "hard"):
-                return word
-    except Exception as e:
-        logger.debug(f"router fail: {e}")
-    return "medium"
 
 
 async def _pick_auto_models(
@@ -678,8 +644,6 @@ async def _pick_auto_models(
     trivial = context_type in ("random", "caption", "observer")
 
     complexity = "easy" if trivial else "medium"
-    if not trivial:
-        complexity = await _route_complexity(prompt)
 
     if complexity == "easy":
         quick = [m for m in ("glm-5.3-flash", "deepseek-v4.1-flash") if m in free_pool]
@@ -887,7 +851,7 @@ async def ask_ai_async(
 
     gemini_models = [
         m for m in models_to_try
-        if m not in DARKAPI_MODELS and m not in NEUTRALBEATS_MODELS
+        if m not in ETAGEONE_MODELS
     ]
     total_attempt = 0
     total_max = len(gemini_models) * len(AI_KEYS)
@@ -897,17 +861,9 @@ async def ask_ai_async(
             contents, base_context,
             embed_system=model_name in EMBED_SYSTEM_MODELS,
         )
-        if model_name in DARKAPI_MODELS:
+        if model_name in ETAGEONE_MODELS:
             answer, usage = await _ask_openai_chat(
-                "darkapi", DARKAPI_URL, DARKAPI_API_KEY, model_name, openai_messages, temp,
-            )
-            if answer:
-                _bill_model(platform, chat_id, user_id, model_name, usage)
-                _note_request(platform, user_id, model_name, usage, answer, context_type, no_fallback)
-                return answer
-        if model_name in NEUTRALBEATS_MODELS:
-            answer, usage = await _ask_openai_chat(
-                "neutralbeats", NEUTRALBEATS_URL, NEUTRALBEATS_API_KEY,
+                "etageone", ETAGEONE_URL, ETAGEONE_API_KEY,
                 model_name, openai_messages, temp,
             )
             if answer:

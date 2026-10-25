@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Minimal live check of NeutralBeats models (1-2 tokens each).
+"""Minimal live check of EtageOne models (1-2 tokens each).
 
 Usage (Windows):
-    $env:NEUTRALBEATS_API_KEY="sk-..."; python scripts/check_models.py
+    $env:ETAGEONE_API_KEY="sk-..."; python scripts/check_models.py
 Usage (Linux/macOS):
-    NEUTRALBEATS_API_KEY=sk-... python scripts/check_models.py
+    ETAGEONE_API_KEY=sk-... python scripts/check_models.py
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import sys
 
 import aiohttp
 
-URL = "https://api.neutralbeats.com/v1/chat/completions"
+URL = "https://api.etage.one/v1/chat/completions"
 MODELS = [
     "glm-5.3-flash",
     "deepseek-v4.1-flash",
@@ -49,9 +49,9 @@ async def check(session: aiohttp.ClientSession, key: str, model: str) -> tuple[s
 
 
 async def main() -> None:
-    key = os.getenv("NEUTRALBEATS_API_KEY") or ""
+    key = os.getenv("ETAGEONE_API_KEY") or ""
     if not key:
-        print("NEUTRALBEATS_API_KEY is not set")
+        print("ETAGEONE_API_KEY is not set")
         sys.exit(2)
     async with aiohttp.ClientSession() as session:
         results = await asyncio.gather(*(check(session, key, m) for m in MODELS))

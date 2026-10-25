@@ -177,10 +177,8 @@ AI_KEY = os.getenv('AI_KEY')
 AI_KEY_1 = os.getenv('AI_KEY_1')
 AI_KEY_2 = os.getenv('AI_KEY_2')
 AI_KEY_3 = os.getenv('AI_KEY_3')
-DARKAPI_API_KEY: str = os.getenv('DARKAPI_API_KEY') or ""
-DARKAPI_URL = "https://darkapi.shop/v1/chat/completions"
-NEUTRALBEATS_API_KEY: str = os.getenv('NEUTRALBEATS_API_KEY') or ""
-NEUTRALBEATS_URL = "https://api.neutralbeats.com/v1/chat/completions"
+ETAGEONE_API_KEY: str = os.getenv('ETAGEONE_API_KEY') or ""
+ETAGEONE_URL = "https://api.etage.one/v1/chat/completions"
 TG_TARGET_CHAT = int(os.getenv('TG_TARGET_CHAT') or "0")
 DS_ALLOWED_GUILD_ID = int(os.getenv('DS_ALLOWED_GUILD_ID') or "0")
 DS_DONATION_CHANNEL_ID = int(os.getenv('DONATIONALERTS_CHANNEL_ID', '0'))
@@ -262,13 +260,7 @@ MINI_APP_URL = "https://kulsh.vercel.app"
 DONATE_URL = "https://kulsh.vercel.app/donate"
 GITHUB_URL = "https://github.com/starfall-apk/kulsh"
 
-DARKAPI_MODELS = (
-    "glm-5.3-flash",
-    "deepseek-v4.1-flash",
-    "deepseek-v4-pro",
-    "gpt-6-luna",
-)
-NEUTRALBEATS_MODELS = (
+ETAGEONE_MODELS = (
     "glm-5.3-flash",
     "deepseek-v4.1-flash",
     "kimi-k3",
@@ -1141,6 +1133,19 @@ SEPARATOR_PATTERN = re.compile(
     r'!+\s*sep(?:[ae]rate)?(?![A-Za-z])',
     re.IGNORECASE,
 )
+# Голый маркер без "!" (модель иногда забывает восклицательный знак).
+# Ловим только безопасные случаи, чтобы не съесть обычное английское слово
+# "separate" в тексте: маркер либо стоит отдельной строкой, либо приклеен
+# к тексту/пунктуации с обеих сторон без пробелов.
+BARE_SEPARATOR_PATTERN = re.compile(
+    r'(?:^[ \t]*(?:sep|separate)[ \t]*[.!]?[ \t]*$'
+    r'|(?<=[^\sA-Za-z0-9])(?:sep|separate)(?=[^\sA-Za-z0-9]))',
+    re.IGNORECASE | re.MULTILINE,
+)
+SEPARATOR_ANY_PATTERN = re.compile(
+    SEPARATOR_PATTERN.pattern + '|' + BARE_SEPARATOR_PATTERN.pattern,
+    re.IGNORECASE | re.MULTILINE,
+)
 NO_SPLIT_MARKER = "\u2063\u2063"
 REACT_PATTERN = re.compile(
     r'(?:!\s*(?:react|реакция)\s*:?\s*([^\s\n]+)'
@@ -1166,7 +1171,7 @@ def split_by_separator(text: str) -> list[str]:
     """Разбивает по !separate (или просто separate). Без ограничений по количеству."""
     if not text:
         return []
-    parts = SEPARATOR_PATTERN.split(text)
+    parts = SEPARATOR_ANY_PATTERN.split(text)
     return [p.strip() for p in parts if p and p.strip()]
 
 
@@ -1251,7 +1256,7 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
         if len(segments) <= 1 and raw_clean.strip():
             segments = _auto_split_sentences(raw_clean.strip())
     else:
-        raw_clean = SEPARATOR_PATTERN.sub(' ', raw_clean)
+        raw_clean = SEPARATOR_ANY_PATTERN.sub(' ', raw_clean)
         raw_clean = re.sub(r'[ \t]{2,}', ' ', raw_clean).strip()
         raw_clean = re.sub(r'\n{2,}', '\n', raw_clean)
         segments = [raw_clean]
@@ -1355,7 +1360,7 @@ def scrub_stray_markers(text: str) -> str:
         return text
     text = normalize_typography(text)
     pats = [
-        SEPARATOR_PATTERN,
+        SEPARATOR_ANY_PATTERN,
         REACT_STRICT_PATTERN,
         REACT_PATTERN,
         WHY_PATTERN,
@@ -1499,7 +1504,7 @@ def clean_extra_text(raw: str) -> list[str]:
         return []
     raw = normalize_typography(raw)
     cleaned, _, _ = extract_utility_markers(raw)
-    cleaned = SEPARATOR_PATTERN.sub(' ', cleaned)
+    cleaned = SEPARATOR_ANY_PATTERN.sub(' ', cleaned)
     cleaned = REACT_STRICT_PATTERN.sub(' ', cleaned)
     cleaned = REACT_PATTERN.sub(' ', cleaned)
     cleaned = WHY_PATTERN.sub(' ', cleaned)
