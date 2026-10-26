@@ -185,18 +185,14 @@ from src.util import (
     user_femboy_state,
     user_looksmaxxing_state,
 
-    COST_ARCHIVE_EDIT,
-    DAILY_CREDITS,
     DONATE_URL,
     LOG_INTRO,
     PREMIUM_ADMIN_ID,
     TEXT_EXTS,
     chat_media_history,
     get_top_donators,
-    get_user_credits,
     prompt_waiting,
     read_log_tail,
-    spend_credits,
     chunk_text,
 )
 
@@ -414,11 +410,6 @@ async def handle_tg_media(message: types.Message) -> None:
         doc_name = message.document.file_name or ""
         ext = doc_name.lower().rsplit('.', 1)[-1] if '.' in doc_name else ""
         if ext == "zip":
-            credits = get_user_credits("tg", user_id)
-            if credits < COST_ARCHIVE_EDIT:
-                await _tg().reply_tg_html(message, tr(lang, "tool_no_credits", COST_ARCHIVE_EDIT, credits, DAILY_CREDITS))
-                return
-            spend_credits("tg", user_id, COST_ARCHIVE_EDIT)
             try:
                 file_bytes = await get_tg_file_bytes(_tg().tg_bot, message.document.file_id)
             except Exception as e:

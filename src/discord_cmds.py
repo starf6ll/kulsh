@@ -44,7 +44,6 @@ from src.looks import (
 from src.util import (
     BOT_VERSION,
     BOT_LOG_FILE,
-    DAILY_CREDITS,
     DONATE_URL,
     GITHUB_URL,
     MINI_APP_URL,
@@ -64,7 +63,6 @@ from src.util import (
     find_media_by_message_id,
     get_ds_scope,
     get_effective_config,
-    get_user_credits,
     get_write_config,
     human_uptime,
     json_str,
@@ -1233,7 +1231,7 @@ def ds_menu_text(lang: str) -> str:
             "Опенсорсный ИИ-бот с характером.\n\n"
             "**Основные**\n\n- `/start` — приветствие\n- `/help` — полный список команд\n"
             "- `/status` — состояние бота\n- `/config` — настройки канала\n"
-            "- `/donate` — поддержка\n- `/credits` — кредиты\n\n"
+            "- `/donate` — поддержка\n\n"
             "**Инструменты**\n\n- `/avatar` — аватарка\n- `/recall` — последние медиа\n"
             "- `/search` — веб-поиск\n- `/chart` — инфографика\n"
             "- `/psl` — оценка внешности\n- `/battle` — баттл фото\n"
@@ -1380,12 +1378,6 @@ async def ds_slash_donate(interaction: discord.Interaction) -> None:
         f"- {tr(lang, 'donate_online')}: {DONATE_URL}"
     )
     await interaction.response.send_message(text)
-
-
-async def ds_slash_credits(interaction: discord.Interaction) -> None:
-    lang = ds_lang_of(interaction)
-    creds = get_user_credits("ds", interaction.user.id)
-    await interaction.response.send_message(tr(lang, "credits_balance", creds, DAILY_CREDITS))
 
 
 # ============================================================

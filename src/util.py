@@ -47,7 +47,6 @@ except Exception:
 BOT_LOG_FILE: str = os.path.join(DATA_DIR, "bot.log")
 DONATIONS_FILE: str = os.path.join(DATA_DIR, "donations.json")
 MEMORY_FILE: str = os.path.join(DATA_DIR, "long_term_memory.json")
-CREDITS_FILE: str = os.path.join(DATA_DIR, "credits.json")
 USER_CONFIGS_FILE: str = os.path.join(DATA_DIR, "user_configs.json")
 DS_SCOPES_FILE: str = os.path.join(DATA_DIR, "ds_scopes.json")
 TRUSTED_CHATS_FILE: str = os.path.join(DATA_DIR, "trusted_chats.json")
@@ -264,9 +263,11 @@ ETAGEONE_MODELS = (
     "glm-5.3-flash",
     "deepseek-v4.1-flash",
     "kimi-k3",
+    "kimi-k3.1-pro",
     "deepseek-v4-pro",
     "gpt-6-luna",
     "claude-haiku-5-5",
+    "gpt-6.1-terra",
     "gpt-6.1-sol",
     "gpt-6-astra",
     "grok-4.7",
@@ -286,8 +287,8 @@ MODEL_GROUPS: list[tuple[str, list[str]]] = [
     ("Anthropic", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-5-5"]),
     ("DeepSeek", ["deepseek-v4-pro", "deepseek-v4.1-flash"]),
     ("Google DeepMind", list(GEMINI_MODELS)),
-    ("Moonshot AI", ["kimi-k3"]),
-    ("OpenAI", ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"]),
+    ("Moonshot AI", ["kimi-k3.1-pro", "kimi-k3"]),
+    ("OpenAI", ["gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"]),
     ("Z.AI", ["glm-5.3-flash"]),
     ("xAI", ["grok-4.7"]),
     ("Alibaba", ["qwen3.8-max-0902"]),
@@ -313,6 +314,7 @@ AUTO_ORDER_FREE: list[str] = [
     "kimi-k3",
     "gpt-6-luna",
     "claude-haiku-5-5",
+    "gpt-6.1-terra",
     "gpt-6.1-sol",
     "gemini-3.8-flash",
     "gemini-3.7-flash",
@@ -325,6 +327,7 @@ AUTO_ORDER_FREE: list[str] = [
 ]
 
 AUTO_ORDER_PAID: list[str] = [
+    "kimi-k3.1-pro",
     "grok-4.7",
     "qwen3.8-max-0902",
     "gpt-6-astra",
@@ -339,9 +342,11 @@ MODEL_DISPLAY: dict[str, str] = {
     "glm-5.3-flash": "🧊 GLM 5.3 Flash",
     "deepseek-v4.1-flash": "🐋 DeepSeek V4.1 Flash",
     "kimi-k3": "🌙 Kimi K3",
+    "kimi-k3.1-pro": "🌜 Kimi K3.1 Pro",
     "deepseek-v4-pro": "🐳 DeepSeek V4 Pro",
     "gpt-6-luna": "🌑 GPT-6 Luna",
     "claude-haiku-5-5": "🎐 Claude Haiku 5.5",
+    "gpt-6.1-terra": "🌍 GPT-6.1 Terra",
     "gpt-6.1-sol": "☀️ GPT-6.1 Sol",
     "gpt-6-astra": "🪐 GPT-6 Astra",
     "grok-4.7": "🌀 Grok 4.7",
@@ -359,6 +364,7 @@ MODEL_DISPLAY: dict[str, str] = {
 }
 
 MODEL_PRICING: dict[str, dict[str, float]] = {
+    "kimi-k3.1-pro": {"input": 0.16, "output": 0.8, "cache_read": 0.014, "cache_write": 0.0},
     "gpt-6-astra": {"input": 0.34, "output": 1.7, "cache_read": 0.034, "cache_write": 0.0},
     "grok-4.7": {"input": 0.2, "output": 1.0, "cache_read": 0.02, "cache_write": 0.0},
     "claude-fable-5-1": {"input": 1.2, "output": 6.0, "cache_read": 0.12, "cache_write": 1.2},
@@ -603,7 +609,6 @@ config_trigger_msgs: dict[str, int] = {}
 prompt_waiting: dict[int, int] = {}
 config_children_msgs: dict[tuple[int, int], list[int]] = {}
 ui_flow_by_msg: dict[int, dict[str, Any]] = {}
-credits_data: dict[str, dict[str, Any]] = {}
 tools_sessions: dict[int, dict[str, Any]] = {}
 chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
 last_random_reply: dict[str, float] = {}
@@ -616,9 +621,6 @@ user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
 user_femboy_state: defaultdict[int, bool] = defaultdict(lambda: False)
 ds_config_scope: dict[int, str] = {}
 
-DAILY_CREDITS = 500
-COST_ARCHIVE_EDIT = 500
-COST_CONSOLE_CMD = 25
 MAX_FILE_SIZE = 500 * 1024
 MAX_TOTAL_UNPACKED = 5 * 1024 * 1024
 MAX_FILES = 100
@@ -647,7 +649,6 @@ def save_json_file(path: str, data: Any) -> None:
 
 donations_data = load_json_file(DONATIONS_FILE)
 long_term_memory = load_json_file(MEMORY_FILE)
-credits_data = load_json_file(CREDITS_FILE)
 
 
 def save_donations() -> None:
@@ -656,10 +657,6 @@ def save_donations() -> None:
 
 def save_long_term_memory(data: JsonDict) -> None:
     save_json_file(MEMORY_FILE, data)
-
-
-def save_credits() -> None:
-    save_json_file(CREDITS_FILE, credits_data)
 
 
 def save_user_configs() -> None:
@@ -721,10 +718,6 @@ def save_all_state() -> None:
     except Exception as e:
         logger.warning(f"save_all_state/long_term_memory: {e}")
     try:
-        save_credits()
-    except Exception as e:
-        logger.warning(f"save_all_state/credits: {e}")
-    try:
         save_donations()
     except Exception as e:
         logger.warning(f"save_all_state/donations: {e}")
@@ -771,40 +764,6 @@ def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
         name = names.get(key, key)
         totals[name] = totals.get(name, 0) + total
     return sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
-
-
-# ============================================================
-# КРЕДИТЫ
-# ============================================================
-def today_str() -> str:
-    return msk_now().strftime('%Y-%m-%d')
-
-
-def get_user_credits(platform: str, user_id: int) -> int:
-    key = f"{platform}_{user_id}"
-    today = today_str()
-    entry = credits_data.get(key)
-    if not entry or entry.get("last_reset") != today:
-        entry = {"credits": DAILY_CREDITS, "last_reset": today}
-        credits_data[key] = entry
-        save_credits()
-    return int(entry["credits"])
-
-
-def spend_credits(platform: str, user_id: int, amount: int) -> bool:
-    key = f"{platform}_{user_id}"
-    today = today_str()
-    entry: JsonDict | None = credits_data.get(key)
-    if not entry or entry.get("last_reset") != today:
-        entry = {"credits": DAILY_CREDITS, "last_reset": today}
-    if entry["credits"] < amount:
-        credits_data[key] = entry
-        save_credits()
-        return False
-    entry["credits"] -= amount
-    credits_data[key] = entry
-    save_credits()
-    return True
 
 
 # ============================================================
@@ -1775,7 +1734,7 @@ def find_entry_file(repo_path: str) -> str | None:
 
 # Файлы состояния, которые нельзя затирать при git reset --hard.
 _STATE_FILE_PATHS: tuple[str, ...] = (
-    USER_CONFIGS_FILE, MEMORY_FILE, CREDITS_FILE, DONATIONS_FILE,
+    USER_CONFIGS_FILE, MEMORY_FILE, DONATIONS_FILE,
     DS_SCOPES_FILE, TRUSTED_CHATS_FILE, PREMIUM_STATE_FILE,
     BALANCES_FILE, DA_PROCESSED_FILE, TICKETS_FILE, DA_TOKEN_FILE,
     PROMO_FILE, ADMIN_USERS_FILE, BLOCK_FILE, ADMIN_REQUESTS_FILE,

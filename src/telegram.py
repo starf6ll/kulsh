@@ -64,7 +64,6 @@ from src.util import (
     BOT_VERSION,
     BOT_LOG_FILE,
     COMMUNICATION_MODES,
-    DAILY_CREDITS,
     DONATE_URL,
     GITHUB_URL,
     MINI_APP_URL,
@@ -103,7 +102,6 @@ from src.util import (
     get_chat_key,
     get_chat_memory,
     get_user_config,
-    get_user_credits,
     last_old_reply,
     last_random_reply,
     logger,
@@ -747,15 +745,6 @@ async def handle_donate_stars(message: types.Message) -> None:
     except Exception as e:
         logger.error(f"donate_stars invoice fail: {e}")
         await reply_tg_html(message, tr(lang, "donate_invoice_fail", str(e)))
-
-
-async def handle_credits(message: types.Message) -> None:
-    if message.from_user is None:
-        return
-    cfg = get_user_config("tg", message.chat.id, message.from_user.id)
-    lang = cfg.get("language", "ru")
-    creds = get_user_credits("tg", message.from_user.id)
-    await reply_tg_html(message, tr(lang, "credits_balance", creds, DAILY_CREDITS))
 
 
 async def handle_balance(message: types.Message) -> None:

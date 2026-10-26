@@ -53,7 +53,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     ),
     "cfg_prompt_label":        ("📝 Кастомный промпт", "📝 Custom prompt"),
     "cfg_prompt_default":      ("стандартный", "default"),
-    "cfg_credits_label":       ("💎 Кредиты", "💎 Credits"),
 
     "cfg_updated":             ("Обновлено", "Updated"),
     "cfg_model_auto":          ("Модель: авто", "Model: auto"),
@@ -150,7 +149,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     "donate_stars_bad":        ("Неверное количество звёзд.", "Invalid star amount."),
     "donate_thanks":           ("🍷🗿 Спасибо за {0} звёзд, кент!", "🍷🗿 Thanks for {0} stars, mate!"),
     "donate_invoice_fail":     ("Не удалось выставить счёт: {0}", "Failed to create invoice: {0}"),
-    "credits_balance":         ("💎 Кредиты: {0}/{1}", "💎 Credits: {0}/{1}"),
 
     "top_donators_title":      ("🏆 Топ донатеров:", "🏆 Top donators:"),
     "top_donators_empty":      ("Пока никто не донатил. Будь первым, бро 🍷🗿\n{0}",
@@ -238,10 +236,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     "tool_error":              ("❌ Ошибка: {0}", "❌ Error: {0}"),
     "tool_no_changes":         ("🤔 ИИ не предложил изменений. {0}", "🤔 AI made no changes. {0}"),
     "tool_parse_fail":         ("❌ Не смог распарсить ответ ИИ: {0}", "❌ Failed to parse AI response: {0}"),
-    "tool_no_credits": (
-        "💎 Недостаточно кредитов для редактирования архива.\nНужно {0}, у тебя {1}/{2}.",
-        "💎 Not enough credits to edit the archive.\nNeed {0}, you have {1}/{2}.",
-    ),
     "tool_download_fail":      ("не смог скачать файл: {0}", "failed to download file: {0}"),
     "tool_review_empty":       ("что тут?", "what's here?"),
 
@@ -337,8 +331,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "/help — эта справка\n"
         "/status — состояние бота\n"
         "/donate — поддержать проект\n"
-        "/donate_stars &lt;N&gt; — донат через Telegram Stars\n"
-        "/credits — баланс кредитов\n\n"
+        "/donate_stars &lt;N&gt; — донат через Telegram Stars\n\n"
         "<b>Настройки:</b>\n"
         "<code>кульш конфиг</code> — настройки (инлайн)\n\n"
         "<b>Утилиты:</b>\n"
@@ -365,8 +358,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "/help — this help\n"
         "/status — bot status\n"
         "/donate — support the project\n"
-        "/donate_stars &lt;N&gt; — donate via Telegram Stars\n"
-        "/credits — credits balance\n\n"
+        "/donate_stars &lt;N&gt; — donate via Telegram Stars\n\n"
         "<b>Settings:</b>\n"
         "<code>kulsh config</code> — settings (inline)\n\n"
         "<b>Utilities:</b>\n"

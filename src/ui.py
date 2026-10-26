@@ -10,7 +10,6 @@ from typing import Any, cast
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from src.util import (
-    DAILY_CREDITS,
     DONATE_URL,
     GITHUB_URL,
     MINI_APP_URL,
@@ -20,7 +19,6 @@ from src.util import (
     json_dict,
     tr,
     get_user_config,
-    get_user_credits,
     is_paid_model,
     model_display_name,
 )
@@ -79,7 +77,6 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
     on = "✅"
     off = "❌"
     theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
-    credits = get_user_credits(platform, user_id)
     stream_txt = on if cfg.get("streaming_enabled") else off
     search_txt = on if cfg.get("web_search_enabled", True) else off
     mode_txt = _mode_display(cfg, lang)
@@ -103,7 +100,6 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"{tr(lang, 'cfg_random')}: {on if cfg.get('random_messages_enabled', True) else off}\n\n"
         f"{line}\n\n"
         f"**{tr(lang, 'cfg_section_other')}**\n\n"
-        f"{tr(lang, 'cfg_credits_label')}: `{credits}/{DAILY_CREDITS}`\n"
         f"{tr(lang, 'cfg_edit_prompt')}: {prompt_safe}"
     )
 

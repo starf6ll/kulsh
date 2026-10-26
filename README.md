@@ -33,7 +33,6 @@ Now also a brutally honest **looksmaxxing analyst** – upload a face photo and 
 - **Remote Administration** – Built-in logging system that allows owners to retrieve `bot.log` files and live stdout directly via chat commands (works in servers **and** DMs).
 - **Automated Engagement** – Periodic auto-posting of "random thoughts" to keep the chat alive.
 - **Donation System** – Support via Telegram Stars and DonationAlerts integration with a cross-platform leaderboard.
-- **Credits System** – Daily per-user credits that gate the heavier tools (archive editing).
 - **🔄 Auto-Update** – Authorized users can trigger a `git pull` and automatic restart directly from Discord (`кульш обновись`), with automatic rollback if a new commit fails the smoke check. Requires systemd setup.
 - **🆕 Interactive Discord UI** – The full settings panel is built from native Discord components: one navigator select plus buttons for toggles, and sub-menus with select menus for language, theme, mode and model — mirroring the Telegram UX. Slash commands are synced **globally**, so the `/` command list is populated in every server the bot is in.
 - **🆕 Drawing Engine (Pillow)** – Kulsh can draw arbitrary images **on his own**, without any special command: if the latest user message asks for a picture, he emits a `!draw` JSON spec that the bot renders with Pillow (shapes, lines, polygons, bezier/SVG paths, gradients, text with custom fonts, shadows, blurs, image overlays — including images pulled straight from a URL). A restricted `!term` terminal lets him fetch fonts/overlay images from any public host (private/loopback/link-local addresses are blocked as SSRF) and `pip install` a whitelisted set of rendering packages; temporary assets are sandboxed and deleted right after the finished image is sent. Drawing can be toggled per chat in settings.
@@ -61,9 +60,9 @@ Now also a brutally honest **looksmaxxing analyst** – upload a face photo and 
 
 - **Core:** Python 3.14+
 - **AI Engine (priority cascade):**
-  - **EtageOne** (`glm-5.3-flash`, `deepseek-v4.1-flash`, `kimi-k3`, `deepseek-v4-pro`, `gpt-6-luna`, `claude-haiku-5-5`, `gpt-6.1-sol`)
+  - **EtageOne** (`glm-5.3-flash`, `deepseek-v4.1-flash`, `kimi-k3`, `kimi-k3.1-pro`, `deepseek-v4-pro`, `gpt-6-luna`, `claude-haiku-5-5`, `gpt-6.1-terra`, `gpt-6.1-sol`)
   - **Google Generative AI / Gemini** (Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash, 3.5 Flash, 3.5 Flash Lite, 2.5 Flash, 2.5 Flash Lite)
-  - A successful response is **not** passed to the next provider. EtageOne models are tried on EtageOne, then skipped for Gemini. `kimi-k3`, `claude-haiku-5-5` and `gpt-6.1-sol` are EtageOne-only.
+  - A successful response is **not** passed to the next provider. EtageOne models are tried on EtageOne, then skipped for Gemini. `kimi-k3`, `kimi-k3.1-pro`, `claude-haiku-5-5`, `gpt-6.1-terra` and `gpt-6.1-sol` are EtageOne-only.
 - **Frameworks:** `pyTelegramBotAPI` (Async), `discord.py` 2.x
 - **Voice Processing:** `discord-ext-voice-receive`, `SpeechRecognition`, `pydub`
 - **Audio/Networking:** `FFmpeg`, `aiohttp`, `edge-tts`
@@ -118,8 +117,8 @@ REPO_PATH=/path/to/bot/folder
 
 **Notes on the AI cascade:**
 - `ETAGEONE_API_KEY` is required.
-- EtageOne models (`glm-5.3-flash`, `deepseek-v4.1-flash`, `kimi-k3`, `deepseek-v4-pro`, `gpt-6-luna`, `claude-haiku-5-5`, `gpt-6.1-sol`, `gpt-6-astra`, `grok-4.7`, `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5`, `qwen3.8-max-0902`) try EtageOne first.
-- `kimi-k3`, `claude-haiku-5-5`, `gpt-6.1-sol` are EtageOne-only and skipped for Gemini.
+- EtageOne models (`glm-5.3-flash`, `deepseek-v4.1-flash`, `kimi-k3`, `kimi-k3.1-pro`, `deepseek-v4-pro`, `gpt-6-luna`, `claude-haiku-5-5`, `gpt-6.1-terra`, `gpt-6.1-sol`, `gpt-6-astra`, `grok-4.7`, `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5`, `qwen3.8-max-0902`) try EtageOne first.
+- `kimi-k3`, `kimi-k3.1-pro`, `claude-haiku-5-5`, `gpt-6.1-terra` and `gpt-6.1-sol` are EtageOne-only and skipped for Gemini.
 - `AI_KEY` is a Gemini fallback. Use `AI_KEY_1`, `AI_KEY_2`, `AI_KEY_3` for the Gemini multi-key fallback.
 - A successful response stops the chain; later providers are not called.
 
@@ -198,7 +197,6 @@ The `кульш обновись` command performs a `git fetch` + `git pull --f
 | `/status` | Bot status (uptime, latency, mode). |
 | `/donate` | Support the project. |
 | `/donate_stars <N>` | Donate via Telegram Stars (invoice). |
-| `/credits` | Your daily credits balance. |
 | `/balance` | Balance, top-up code and payment menu. |
 | `/profile` | Profile card with balance and top-up stats. |
 | `/support [text]` | Contact support (creates a ticket). |
@@ -230,7 +228,6 @@ The `кульш обновись` command performs a `git fetch` + `git pull --f
 | `/status` | Bot status. |
 | `/config [scope]` | View / change channel settings (`self` / `shared`, admin only). |
 | `/donate` | Support the project. |
-| `/credits` | Credits balance. |
 | `/balance` | Balance and top-up menu (sent to DM in servers). |
 | `/profile` | Profile with balance and top-up stats. |
 | `/support [text]` | Contact support (creates a ticket). |
@@ -377,29 +374,19 @@ Metrics: softness, hair, style, build, expression, skin, charm, voice vibe. Incl
 
 ---
 
-## 💎 Credits
-
-Each user gets **500 credits per day** (reset daily, MSK). Heavier tools consume credits:
-
-| Action | Cost |
-|--------|------|
-| Archive edit (send a `.zip` in DM) | 500 |
-| Safe console command | 25 |
-
----
-
 ## 💳 Balance & Paid Models
 
-The bot has a real ruble balance. Free models cost nothing; paid models are charged **after** a successful response by the actual token usage (`USD_TO_RUB` converts the provider price). If no answer was received, nothing is charged.
+The bot has a real ruble balance. Free models cost nothing and do not consume the website's daily free limit; the bot has no daily credits system. Paid models are charged **after** a successful response by the actual token usage (`USD_TO_RUB` converts the provider price). If no answer was received, nothing is charged.
 
-| Model | Input / 1M | Output / 1M | Cached input / 1M |
-|-------|-----------|-------------|-------------------|
-| GPT-6 Astra | $0.34 | $1.70 | $0.034 |
-| Grok 4.7 | $0.20 | $1.00 | $0.02 |
-| Claude Fable 5.1 | $1.20 | $6.00 | $0.12 |
-| Claude Opus 5.5 | $0.60 | $3.20 | $0.06 |
-| Claude Sonnet 5.5 | $0.40 | $2.00 | $0.04 |
-| Qwen3.8 Max | $0.20 | $1.00 | $0.02 |
+| Model | Input / 1M | Output / 1M | Cached input / 1M | Cache write / 1M |
+|-------|-----------|-------------|-------------------|------------------|
+| Kimi K3.1 Pro | $0.16 | $0.80 | $0.014 | $0 |
+| GPT-6 Astra | $0.34 | $1.70 | $0.034 | $0 |
+| Grok 4.7 | $0.20 | $1.00 | $0.02 | $0 |
+| Claude Fable 5.1 | $1.20 | $6.00 | $0.12 | $1.20 |
+| Claude Opus 5.5 | $0.60 | $3.20 | $0.06 | $0.60 |
+| Claude Sonnet 5.5 | $0.40 | $2.00 | $0.04 | $0.40 |
+| Qwen3.8 Max | $0.20 | $1.00 | $0.02 | $0 |
 
 Everything else is free. Big paid models are never used for PSL / Femboy ratings — those always run on a cheap model. When a paid model is selected with an empty balance, the bot refuses the request with a clear in-chat notice (current balance, the model, and where to top up) instead of silently spending on a paid cascade.
 

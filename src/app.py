@@ -118,7 +118,6 @@ def register_telegram() -> None:
     deco(getattr(tg_bot, "message_handler"))(commands=["status"])(_guard_msg(telegram.handle_status))
     deco(getattr(tg_bot, "message_handler"))(commands=["donate"])(_guard_msg(telegram.handle_donate))
     deco(getattr(tg_bot, "message_handler"))(commands=["donate_stars"])(_guard_msg(telegram.handle_donate_stars))
-    deco(getattr(tg_bot, "message_handler"))(commands=["credits"])(_guard_msg(telegram.handle_credits))
     deco(getattr(tg_bot, "message_handler"))(commands=["balance"])(_guard_msg(telegram.handle_balance))
     deco(getattr(tg_bot, "message_handler"))(commands=["profile"])(_guard_msg(telegram.handle_profile))
     deco(getattr(tg_bot, "message_handler"))(commands=["support"])(_guard_msg(telegram.handle_support))
@@ -137,7 +136,6 @@ def register_discord() -> None:
     tree.command(name="help", description="Command list / Список команд")(discord_cmds.ds_slash_help)
     tree.command(name="status", description="Bot status / Состояние бота")(discord_cmds.ds_slash_status)
     tree.command(name="donate", description="Support the project / Поддержать проект")(discord_cmds.ds_slash_donate)
-    tree.command(name="credits", description="Credits balance / Баланс кредитов")(discord_cmds.ds_slash_credits)
     tree.command(name="balance", description="Balance and top-up / Баланс и пополнение")(discord_cmds.ds_slash_balance)
     tree.command(name="profile", description="Profile / Профиль")(discord_cmds.ds_slash_profile)
     tree.command(name="support", description="Contact support / Поддержка")(discord_cmds.ds_slash_support)
@@ -207,7 +205,7 @@ def _smoke_check() -> None:  # pyright: ignore[reportUnusedFunction]
             raise RuntimeError(f"{getattr(mod, '__name__', '?')}.{name} — не callable")
 
     for name in ("bind", "handle_start", "handle_menu", "handle_help", "handle_status",
-                 "handle_donate", "handle_donate_stars", "handle_credits",
+                 "handle_donate", "handle_donate_stars",
                  "handle_toggle_premium", "handle_pre_checkout", "handle_successful_payment",
                  "handle_cfg_callback", "handle_menu_callback"):
         _need(telegram, name)
@@ -221,7 +219,7 @@ def _smoke_check() -> None:  # pyright: ignore[reportUnusedFunction]
     _need(discord_msg, "on_message")
 
     for name in ("bind", "ds_slash_start", "ds_slash_menu", "ds_slash_help", "ds_slash_status",
-                 "ds_slash_donate", "ds_slash_credits", "ds_slash_config", "ds_slash_logs",
+                 "ds_slash_donate", "ds_slash_config", "ds_slash_logs",
                  "ds_slash_groupinfo", "ds_slash_userinfo", "ds_slash_avatar", "ds_slash_recall",
                  "ds_slash_search", "ds_slash_chart", "ds_slash_psl", "ds_slash_battle",
                  "ds_slash_femboy", "ds_slash_femboy_battle"):
@@ -306,7 +304,6 @@ async def main() -> None:
             types.BotCommand("support", "💬 Написать в поддержку"),
             types.BotCommand("help", "📚 Список всех команд"),
             types.BotCommand("status", "🟢 Состояние бота"),
-            types.BotCommand("credits", "💎 Дневные кредиты"),
             types.BotCommand("donate", "❤️ Поддержать проект"),
         ]
         en_commands = [
@@ -317,7 +314,6 @@ async def main() -> None:
             types.BotCommand("support", "💬 Contact support"),
             types.BotCommand("help", "📚 All commands"),
             types.BotCommand("status", "🟢 Bot status"),
-            types.BotCommand("credits", "💎 Daily credits"),
             types.BotCommand("donate", "❤️ Support the project"),
         ]
         try:
