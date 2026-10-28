@@ -427,14 +427,14 @@ Send the bot a file in a private chat:
 
 If you have any technical questions, suggestions, or just want to chat about the project:
 
-- **starfall-apk (Lead Dev):** [Telegram](https://t.me/wf9ll) | Discord: `st6rf9ll`
+- **defaultfall (Lead Dev):** [Telegram](https://t.me/wf9ll) | Discord: `st6rf9ll`
 - **pomidorka1515 (Hosting):** [Telegram](https://t.me/pomidorka_1515) | Discord: `pomidorka1515`
 
-Project Link: [https://github.com/starfall-apk/kulsh](https://github.com/starfall-apk/kulsh)
+Project Link: [https://github.com/defaultfall/kulsh](https://github.com/defaultfall/kulsh)
 
-Web Version: [https://kulsh-ai.web.app/](https://kulsh-ai.web.app/)
+Web Version: [https://kulsh.vercel.app/](https://kulsh.vercel.app/)
 
-Donate: [https://kulsh-ai.web.app/donate.html](https://kulsh-ai.web.app/donate.html)
+Donate: [https://kulsh.vercel.app/donate/](https://kulsh.vercel.app/donate/)
 
 ---
 
@@ -442,7 +442,7 @@ Donate: [https://kulsh-ai.web.app/donate.html](https://kulsh-ai.web.app/donate.h
 This project is licensed under the AGPL v3.0 License – see the [LICENSE file](LICENSE) for details.
 ## Shared accounts with the website
 
-The bot and [kulsh-web](https://github.com/starfall-apk/kulsh-web) use one account
+The bot and [kulsh-web](https://github.com/defaultfall/kulsh-web) use one account
 and one balance. Both read and write the same Upstash Redis keys, so a top-up or a
 paid request in Telegram/Discord is immediately visible on the site and in the public API.
 
