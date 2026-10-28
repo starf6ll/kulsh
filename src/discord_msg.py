@@ -566,7 +566,10 @@ async def on_message(message: discord.Message) -> None:
                 answer = await ask_ai_async(messages=messages, image_bytes=media_bytes,
                                             image_mime=img_mime, chat_id=chat_id,
                                             user_id=user_id, platform="ds")
-                await send_ds_ai_response(message, chat_id, user_id, answer, user_text=prompt)
+                await send_ds_ai_response(
+                    message, chat_id, user_id, answer, user_text=prompt,
+                    user_images=[media_bytes] if media_bytes else None,
+                )
                 asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer,
                                                    platform="ds", user_id=user_id, source_chat_id=chat_id))
             except Exception as e:

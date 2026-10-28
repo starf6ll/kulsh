@@ -5,6 +5,7 @@
 """Telegram keyboards, callbacks, and message handlers."""
 
 import asyncio
+from io import BytesIO
 from collections import deque
 import json
 import random
@@ -28,6 +29,16 @@ from src.ai import (
 )
 from src.charts import extract_chart_marker, render_infographic
 from src.draw import process_drawing
+from src.image_gen import (
+    consume_image,
+    dedupe_refs,
+    extract_image_parts,
+    generate_image,
+    image_remaining,
+    random_progress_phrase,
+    recent_generated_images,
+    remember_generated_image,
+)
 from src.looks import (
     create_femboy_battle_infographic,
     create_femboy_infographic,
@@ -1406,14 +1417,95 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
     draw_png = None
     draw_before = ""
     draw_after = ""
-    if cfg.get("drawing_enabled", True) and ("!draw" in (answer_raw or "") or "!term" in (answer_raw or "")):
-        try:
-            res = await process_drawing(answer_raw or "")
-            draw_png, draw_before, draw_after = res.png, res.before, res.after
-            if res.status:
-                logger.info(f"🎨 draw terminal: {res.status}")
-        except Exception as e:
-            logger.error(f"tg draw: {e}")
+    draw_generated = False
+
+    def _manual_note(text_before: str, note: str, manual_before: str) -> str:
+        parts = [p for p in (text_before, note, manual_before) if p]
+        return "!separate".join(parts)
+
+    if cfg.get("drawing_enabled", True):
+        image_spec, image_before, image_after = extract_image_parts(answer_raw or "")
+        if image_spec is not None:
+            refs = list(user_images or [])
+            if image_spec.get("edit"):
+                try:
+                    last_bytes, last_kind, _last_id = await _media().fetch_last_media_tg(chat_id)
+                    if last_bytes and last_kind in ("photo", "video", "animation"):
+                        refs.append(last_bytes)
+                except Exception as e:
+                    logger.warning(f"tg image edit ref: {e}")
+                refs.extend(recent_generated_images(f"tg_{chat_id}", 4))
+            refs = dedupe_refs(refs, 4)
+            left = image_remaining("tg", user_id)
+            if left > 0:
+                phrase = random_progress_phrase()
+                status = None
+
+                async def _update_progress(pct: int) -> None:
+                    if status is None:
+                        return
+                    try:
+                        await tg_bot.edit_message_text(
+                            f"🎨🗿 {phrase} | {pct}%",
+                            chat_id, status.message_id,
+                        )
+                    except Exception:
+                        pass
+
+                try:
+                    status = await tg_bot.send_message(chat_id, f"🎨🗿 {phrase} | 0%")
+                    png_bytes = await generate_image(image_spec, refs, progress_cb=_update_progress)
+                    if png_bytes:
+                        consume_image("tg", user_id)
+                        draw_png = BytesIO(png_bytes)
+                        draw_before, draw_after = image_before, image_after
+                        draw_generated = True
+                    else:
+                        answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_gen_fail")
+                except Exception as e:
+                    logger.error(f"tg image gen: {e}")
+                    answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_gen_fail")
+                finally:
+                    if status is not None:
+                        try:
+                            await tg_bot.delete_message(chat_id, status.message_id)
+                        except Exception:
+                            pass
+            else:
+                # Лимит кончился: просим текстовую модель нарисовать вручную через !draw.
+                try:
+                    manual_prompt = (
+                        f"Пользователь просит: {orig_user_text or 'нарисуй картинку'}\n\n"
+                        "Лимит нормальных генераций на сегодня исчерпан. Нарисуй это вручную через !draw. "
+                        "Ответь ТОЛЬКО блоком !draw с JSON, без текста до и после. "
+                        "Подбери размеры и композицию сам."
+                    )
+                    manual_raw = await ask_ai_async(
+                        prompt=manual_prompt,
+                        image_bytes_list=refs or None,
+                        image_mime_list=(["image/png"] * len(refs)) if refs else None,
+                        chat_id=chat_id, user_id=user_id, platform="tg",
+                    )
+                    mres = await process_drawing(manual_raw or "")
+                    if mres.png is not None:
+                        draw_png = mres.png
+                        draw_before = _manual_note(
+                            image_before, tr(lang, "image_limit_manual"), mres.before
+                        )
+                        draw_after = mres.after
+                    else:
+                        answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_limit_out")
+                except Exception as e:
+                    logger.error(f"tg image limit manual fallback: {e}")
+                    answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_limit_out")
+        elif "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
+            try:
+                res = await process_drawing(answer_raw or "")
+                draw_png, draw_before, draw_after = res.png, res.before, res.after
+                if res.status:
+                    logger.info(f"🎨 draw terminal: {res.status}")
+            except Exception as e:
+                logger.error(f"tg draw: {e}")
 
     clean_segments, markers = process_ai_response(
         draw_before if draw_png is not None else answer_raw,
@@ -1495,12 +1587,18 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
                 caption = strip_chat_punctuation(caption)
             caption = caption[:1024]
         try:
-            await tg_bot.send_photo(
+            draw_bytes = draw_png.getvalue() if hasattr(draw_png, "getvalue") else None
+            sent_photo = await tg_bot.send_photo(
                 chat_id, InputFile(draw_png, file_name="drawing.png"),
                 caption=caption or None,
                 reply_to_message_id=message.message_id,
             )
             add_bot_memory(f"tg_{message.chat.id}", "[нарисовал картинку]" + (f" {caption}" if caption else ""))
+            if draw_generated and draw_bytes:
+                remember_generated_image(
+                    f"tg_{chat_id}", draw_bytes, "image/png",
+                    getattr(sent_photo, "message_id", None),
+                )
         except Exception as e:
             logger.error(f"tg draw send: {e}")
         for j, seg in enumerate(after_segments[1:], start=1):

@@ -45,6 +45,7 @@ except Exception:
     DATA_DIR = os.getcwd()
 
 BOT_LOG_FILE: str = os.path.join(DATA_DIR, "bot.log")
+IMAGE_USAGE_FILE: str = os.path.join(DATA_DIR, "image_usage.json")
 DONATIONS_FILE: str = os.path.join(DATA_DIR, "donations.json")
 MEMORY_FILE: str = os.path.join(DATA_DIR, "long_term_memory.json")
 USER_CONFIGS_FILE: str = os.path.join(DATA_DIR, "user_configs.json")
@@ -1085,6 +1086,7 @@ UTILITY_PATTERNS = {
     "user_info": re.compile(r'!\s*user[\s_]*info(?::\s*(\d+))?(?![A-Za-z])', re.IGNORECASE),
 }
 STRAY_EXTRA_PATTERNS = (
+    re.compile(r'!\s*image\b', re.IGNORECASE),
     re.compile(r'!\s*draw\b', re.IGNORECASE),
     re.compile(r'!\s*term\b[^\n]*', re.IGNORECASE),
 )
@@ -1734,7 +1736,7 @@ def find_entry_file(repo_path: str) -> str | None:
 
 # Файлы состояния, которые нельзя затирать при git reset --hard.
 _STATE_FILE_PATHS: tuple[str, ...] = (
-    USER_CONFIGS_FILE, MEMORY_FILE, DONATIONS_FILE,
+    USER_CONFIGS_FILE, MEMORY_FILE, DONATIONS_FILE, IMAGE_USAGE_FILE,
     DS_SCOPES_FILE, TRUSTED_CHATS_FILE, PREMIUM_STATE_FILE,
     BALANCES_FILE, DA_PROCESSED_FILE, TICKETS_FILE, DA_TOKEN_FILE,
     PROMO_FILE, ADMIN_USERS_FILE, BLOCK_FILE, ADMIN_REQUESTS_FILE,

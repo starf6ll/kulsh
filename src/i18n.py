@@ -51,6 +51,12 @@ TEXTS: dict[str, tuple[str, str]] = {
         "your balance is {0} ₽ — not enough for {1}.\n"
         "top up with /balance or pick a free model in settings.",
     ),
+    "image_limit_manual":      ("лимит на нормальные генерации кончился, так что рисую вручную",
+                                "the regular image generations are used up, so I'll draw it manually"),
+    "image_limit_out":         ("лимит генераций картинок на сегодня исчерпан. попробуй завтра",
+                                "the image generation limit is used up for today. try again tomorrow"),
+    "image_gen_fail":          ("не получилось сгенерировать картинку. попробуй ещё раз",
+                                "couldn't generate the image. try again"),
     "cfg_prompt_label":        ("📝 Кастомный промпт", "📝 Custom prompt"),
     "cfg_prompt_default":      ("стандартный", "default"),
 
