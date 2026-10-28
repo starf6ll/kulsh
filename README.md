@@ -76,7 +76,7 @@ Now also a brutally honest **looksmaxxing analyst** – upload a face photo and 
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/starfall-apk/kulsh.git
+git clone https://github.com/starf6ll/kulsh.git
 cd kulsh
 ```
 
@@ -414,7 +414,7 @@ Send the bot a file in a private chat:
 ## 👥 Credits & Special Thanks
 
 ### Development Team
-- **starfall-apk (st6rf9ll)** — Lead Author, Creator & AI Logic Architect (formerly *downfalls2920*).
+- **starf6ll (st6rf9ll)** — Lead Author, Creator & AI Logic Architect (formerly *downfalls2920*).
 - **pomidorka1515 (pomi)** — Co-author & Infrastructure (Bot Hosting & Linux Optimization).
 
 ### Special Thanks
@@ -427,10 +427,10 @@ Send the bot a file in a private chat:
 
 If you have any technical questions, suggestions, or just want to chat about the project:
 
-- **defaultfall (Lead Dev):** [Telegram](https://t.me/wf9ll) | Discord: `st6rf9ll`
+- **starf6ll (Lead Dev):** [Telegram](https://t.me/lolfall) | Discord: `st6rf9ll`
 - **pomidorka1515 (Hosting):** [Telegram](https://t.me/pomidorka_1515) | Discord: `pomidorka1515`
 
-Project Link: [https://github.com/defaultfall/kulsh](https://github.com/defaultfall/kulsh)
+Project Link: [https://github.com/starf6ll/kulsh](https://github.com/starf6ll/kulsh)
 
 Web Version: [https://kulsh.vercel.app/](https://kulsh.vercel.app/)
 
@@ -442,7 +442,7 @@ Donate: [https://kulsh.vercel.app/donate/](https://kulsh.vercel.app/donate/)
 This project is licensed under the AGPL v3.0 License – see the [LICENSE file](LICENSE) for details.
 ## Shared accounts with the website
 
-The bot and [kulsh-web](https://github.com/defaultfall/kulsh-web) use one account
+The bot and [kulsh-web](https://github.com/starf6ll/kulsh-web) use one account
 and one balance. Both read and write the same Upstash Redis keys, so a top-up or a
 paid request in Telegram/Discord is immediately visible on the site and in the public API.
 

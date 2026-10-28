@@ -1,5 +1,5 @@
 # Kulsh GPT | v2.49.0
-# by (main author): starfall-apk
+# by (main author): starf6ll
 # coauthor & bot hosting: pomidorka1515
 #
 # Launch shim. The bot lives in src/; this file keeps `python kulsh.py` working.

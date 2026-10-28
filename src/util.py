@@ -1,5 +1,5 @@
 # Kulsh GPT | v2.49.0
-# by (main author): starfall-apk
+# by (main author): starf6ll
 # coauthor & bot hosting: pomidorka1515
 
 """Shared helpers: time, i18n, typing, persistence, memory, text, media bytes."""
@@ -199,7 +199,7 @@ trusted_ds_channels: set[int] = set()
 
 # Алиасы кентов в нижнем регистре. Используются, чтобы понять, что кент есть в чате.
 KENT_ALIASES: tuple[str, ...] = (
-    "фоллз", "фолз", "starfall-apk", "starfall", "lolfall",
+    "фоллз", "фолз", "starf6ll", "starfall", "lolfall",
     "рекми", "реким", "reqim", "rekme",
     "нейзи", "neizy", "n3iz", "n3", "н3",
     "ponil", "понил",
@@ -257,7 +257,7 @@ def is_trusted_chat(platform: str, chat_id: int) -> bool:
 
 MINI_APP_URL = "https://kulsh.vercel.app"
 DONATE_URL = "https://kulsh.vercel.app/donate"
-GITHUB_URL = "https://github.com/starfall-apk/kulsh"
+GITHUB_URL = "https://github.com/starf6ll/kulsh"
 
 ETAGEONE_MODELS = (
     "glm-5.3-flash",

@@ -1,5 +1,5 @@
 # Kulsh GPT | v2.47.0
-# by (main author): starfall-apk
+# by (main author): starf6ll
 # coauthor & bot hosting: pomidorka1515
 
 """Telegram inline keyboards and menu/start text."""

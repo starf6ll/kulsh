@@ -1,5 +1,5 @@
 # Kulsh GPT | v2.48.0
-# by (main author): starfall-apk
+# by (main author): starf6ll
 # coauthor & bot hosting: pomidorka1515
 
 """Pillow drawing engine: JSON-spec renderer + SVG subset + safe asset terminal.

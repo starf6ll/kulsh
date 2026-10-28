@@ -1,5 +1,5 @@
 # Kulsh GPT | v2.48.0
-# by (main author): starfall-apk
+# by (main author): starf6ll
 # coauthor & bot hosting: pomidorka1515
 
 """Gemini client, system prompt, long-term memory extraction, web search."""
@@ -215,7 +215,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     if trusted:
         kents_line = (
             "Твои кенты (полные ники, чтобы узнавать их по юзернеймам и в истории чата): "
-            "Богдан — Фоллз, starfall-apk, starfall, lolfall (он же твой создатель); "
+            "Богдан — Фоллз, starf6ll, starfall, lolfall (он же твой создатель); "
             "Антон — Рекми, Реким, Reqim, в дискорде изредка rekme; "
             "Артём — Нейзи, N3 (иногда «N³»), Neizy, n3iz, н3; "
             "Понил — Ponil (PoNiL); "
@@ -273,7 +273,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     )
 
     github_line = (
-        "Ссылка на твой репозиторий: https://github.com/starfall-apk/kulsh. Давай её ТОЛЬКО если прямо просят "
+        "Ссылка на твой репозиторий: https://github.com/starf6ll/kulsh. Давай её ТОЛЬКО если прямо просят "
         "ссылку, репозиторий или гитхаб. В обычных ответах она не появляется. "
     )
 

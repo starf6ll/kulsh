@@ -1,5 +1,5 @@
 # Kulsh GPT | v2.50.0
-# by (main author): starfall-apk
+# by (main author): starf6ll
 # coauthor & bot hosting: pomidorka1515
 
 """Secret admin panel: stats, blocks, balance top-ups and exact broadcasts."""
