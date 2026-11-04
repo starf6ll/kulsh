@@ -12,3 +12,8 @@
 !scripts/**
 __pycache__/
 *.py[cod]
+data/
+*.log
+*.pyc
+.venv/
+venv/
