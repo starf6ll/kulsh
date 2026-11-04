@@ -33,6 +33,8 @@ from src.charts import extract_chart_marker, render_infographic
 from src import cloud, promo, agent
 from src.draw import process_drawing
 from src.image_gen import (
+    IMAGE_MODEL_CHOICES,
+    IMAGE_MODEL_HINTS,
     consume_image,
     dedupe_refs,
     extract_image_parts,
@@ -571,11 +573,15 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         if action.startswith("tell:"):
             try:
                 query, outgoing = action[5:].split("\x1f", 1)
-                report = await agent.tell("ds", chat_id, is_private_chat,
+                result = await agent.tell("ds", chat_id, is_private_chat,
                                           user_id, query, outgoing)
+                report = None
+                if not result.get("ok") or not clean_segments:
+                    report = await agent.describe_tell("ds", chat_id, user_id, result)
             except ValueError:
                 report = "не понял, кому и что отправить"
-            agent_reports.append(report)
+            if report:
+                agent_reports.append(report)
         elif action.startswith("notify_owner:"):
             await agent.notify_owner(
                 f"⚠️ {display_name} (ds:{user_id}, канал {chat_id}): "
@@ -890,7 +896,7 @@ class DsConfigView(discord.ui.View):
             discord.SelectOption(label=f"{tr(lang, 'cfg_reactions')}: {b('reactions_enabled')}", value="reactions_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_websearch')}: {b('web_search_enabled')}", value="web_search_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_drawing')}: {b('drawing_enabled')}", value="drawing_enabled"),
-            discord.SelectOption(label=f"🎨 Image model: {image_model_label(cfg.get('image_model', 'auto'))}", value="image_model"),
+            discord.SelectOption(label=f"🎨 {tr(lang, 'cfg_image_model')}: {image_model_label(cfg.get('image_model', 'auto'), lang)}", value="image_model"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_stickers')}: {b('stickers_enabled')}", value="stickers_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_autoreply')}: {b('random_reply_enabled', False)}", value="random_reply_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_random')}: {b('random_messages_enabled')}", value="random_messages_enabled"),
@@ -898,7 +904,7 @@ class DsConfigView(discord.ui.View):
         ]
         if self.is_admin and not self.is_dm:
             options.append(discord.SelectOption(
-                label=f"🌐 Межчатовые: {'✅' if agent.group_setting('ds', self.chat_id, 'cross_chat_enabled', False) else '❌'}",
+                label=f"🌐 Приём сообщений из других чатов: {'✅' if agent.group_setting('ds', self.chat_id, 'cross_chat_enabled', False) else '❌'}",
                 value="group_cross",
             ))
             options.append(discord.SelectOption(
@@ -1002,12 +1008,7 @@ class DsConfigView(discord.ui.View):
             await self._refresh_main(interaction)
             return
         if value == "image_model":
-            cfg = self._write()
-            choices = ("auto", "flare", "sunburst", "paint")
-            current = cfg.get("image_model", "auto")
-            cfg["image_model"] = choices[(choices.index(current) + 1) % len(choices)] if current in choices else "auto"
-            save_user_configs()
-            await self._refresh_main(interaction)
+            await self._open_choice(interaction, "image_model")
             return
         if value in ("lang", "theme", "mode", "model"):
             await self._open_choice(interaction, value)
@@ -1135,6 +1136,17 @@ class DsChoiceView(discord.ui.View):
             if p.is_dm:
                 options.append(discord.SelectOption(label=tr(lang, "mode_pro"), value="pro", default=cur == "pro"))
             placeholder = tr(lang, "cfg_choose_mode")
+        elif self.kind == "image_model":
+            cur = cfg.get("image_model", "auto")
+            hints = IMAGE_MODEL_HINTS.get(lang, IMAGE_MODEL_HINTS["ru"])
+            options = [
+                discord.SelectOption(
+                    label=image_model_label(choice, lang), value=choice, default=cur == choice,
+                    description=hints[choice][:100],
+                )
+                for choice in IMAGE_MODEL_CHOICES
+            ]
+            placeholder = tr(lang, "cfg_image_model")
         elif self.kind == "model":
             cur = cfg.get("model")
             options = [discord.SelectOption(
@@ -1181,6 +1193,8 @@ class DsChoiceView(discord.ui.View):
                 await interaction.response.send_message(tr(p._lang(), "mode_need_dm"), ephemeral=True)
                 return
             cfg["communication_mode"] = val
+        elif self.kind == "image_model":
+            cfg["image_model"] = val
         elif self.kind == "model":
             if val == "auto":
                 cfg["model"] = None

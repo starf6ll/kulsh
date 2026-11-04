@@ -121,6 +121,17 @@ async def on_message(message: discord.Message) -> None:
     chat_id = message.channel.id
     user_id = message.author.id
     register_ds_channel(chat_id, guild.id if guild else None)
+    try:
+        from src import chats
+        chats.register(
+            "ds", chat_id,
+            "private" if guild is None else "channel",
+            (getattr(guild, "name", "") or getattr(message.channel, "name", "") or str(chat_id))
+            if guild else str(getattr(message.channel, "name", "") or chat_id),
+            guild.id if guild else None,
+        )
+    except Exception:
+        pass
     content = (message.content or "").strip()
     if admin_panel.is_secret_command(content):
         if admin_panel.is_admin_ds(user_id):

@@ -90,21 +90,67 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([util.take_reply_target(seg) for seg in segments],
                          [("привет", 123), ("пока", 456)])
 
-    async def test_cross_chat_requires_group_permission(self):
+    async def test_cross_chat_to_user_needs_no_source_permission(self):
         from src import agent
-        old_groups, old_contacts, old_send = agent._groups, agent._contacts, agent.send_dm
+        old_groups, old_contacts, old_text = agent._groups, agent._contacts, agent._send_text
         try:
             agent._groups = {}
             agent._contacts = {"tg:1": {"platform": "tg", "id": 1, "display": "Петя",
                                         "username": "petya", "private": True}}
-            agent.send_dm = AsyncMock(return_value=True)
+            agent._send_text = AsyncMock(return_value=True)
             result = await agent.tell("tg", 9, False, 2, "петя", "привет")
-            self.assertIn("выключены", result)
-            agent._groups = {"tg_9": {"cross_chat_enabled": True}}
-            result = await agent.tell("tg", 9, False, 2, "петя", "привет")
-            self.assertIn("отправил", result)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["name"], "Петя")
         finally:
-            agent._groups, agent._contacts, agent.send_dm = old_groups, old_contacts, old_send
+            agent._groups, agent._contacts, agent._send_text = old_groups, old_contacts, old_text
+
+    async def test_cross_chat_into_group_follows_target_setting(self):
+        from src import agent, chats
+        old_groups, old_text, old_chats = agent._groups, agent._send_text, chats._chats
+        try:
+            agent._groups = {}
+            agent._send_text = AsyncMock(return_value=True)
+            chats._chats = {"tg:-100": {"platform": "tg", "id": -100,
+                                        "kind": "group", "title": "Кенты"}}
+            result = await agent.tell("tg", 9, False, 2, "Кенты", "привет")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["reason"], "cross_chat_disabled")
+            agent._groups = {"tg_-100": {"cross_chat_enabled": True}}
+            result = await agent.tell("tg", 9, False, 2, "Кенты", "привет")
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["target"], "chat")
+        finally:
+            agent._groups, agent._send_text, chats._chats = old_groups, old_text, old_chats
+
+    async def test_owner_alias_resolves_without_contact_history(self):
+        from src import agent
+        old_contacts, old_text = agent._contacts, agent._send_text
+        try:
+            agent._contacts = {}
+            agent._send_text = AsyncMock(return_value=True)
+            result = await agent.tell("tg", 9, True, 2, "фолз", "привет")
+            self.assertTrue(result["ok"])
+        finally:
+            agent._contacts, agent._send_text = old_contacts, old_text
+
+    def test_image_model_labels_are_human_readable(self):
+        from src.image_gen import image_model_label
+        self.assertEqual(image_model_label("auto", "ru"), "🎲 Авто")
+        self.assertEqual(image_model_label("auto", "en"), "🎲 Auto")
+        self.assertEqual(image_model_label("flare", "ru"), "GPT Image 2.5 Flare")
+        self.assertEqual(image_model_label("sunburst", "ru"), "GPT Image 2.5 Sunburst")
+        self.assertEqual(image_model_label("paint", "ru"), "Kulsh Paint 1.1")
+
+    def test_group_toggles_have_expected_defaults(self):
+        from src import agent
+        old_groups = agent._groups
+        try:
+            agent._groups = {}
+            self.assertFalse(agent.cross_chat_allowed("tg", -100, False))
+            self.assertTrue(agent.cross_chat_allowed("tg", 42, True))
+            self.assertTrue(agent.autonomous_allowed("tg", -100))
+        finally:
+            agent._groups = old_groups
 
     async def test_process_drawing_accepts_native_svg(self):
         from src import draw

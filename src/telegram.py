@@ -31,10 +31,12 @@ from src.ai import (
 from src.charts import extract_chart_marker, render_infographic
 from src.draw import process_drawing
 from src.image_gen import (
+    IMAGE_MODEL_CHOICES,
     consume_image,
     dedupe_refs,
     extract_image_parts,
     generate_image,
+    image_model_label,
     image_remaining,
     random_progress_phrase,
     recent_generated_images,
@@ -59,9 +61,11 @@ from src.rich import (
     typing_with_delay_tg,
 )
 from src.ui import (
+    build_image_model_keyboard,
     build_menu_text,
     build_start_text,
     config_text,
+    image_model_text,
     model_picker_text,
     mode_picker_text,
     build_lang_keyboard,
@@ -540,10 +544,19 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(cb_id(call), toast)
         return
     elif action == "image_model":
-        choices = ("auto", "flare", "sunburst", "paint")
-        current = cfg.get("image_model", "auto")
-        cfg["image_model"] = choices[(choices.index(current) + 1) % len(choices)] if current in choices else "auto"
+        await edit_or_send(call, image_model_text("tg", chat_id, user_id),
+                            build_image_model_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(cb_id(call))
+        return
+    elif action == "image_set":
+        choice = extra[0] if extra else "auto"
+        if choice in IMAGE_MODEL_CHOICES:
+            cfg["image_model"] = choice
         save_user_configs()
+        await edit_or_send(call, image_model_text("tg", chat_id, user_id),
+                            build_image_model_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(cb_id(call), image_model_label(cfg.get("image_model"), lang))
+        return
     elif action == "reactions":
         cfg["reactions_enabled"] = not cfg.get("reactions_enabled", True)
         toast = tr(lang, "cfg_reactions_on") if cfg["reactions_enabled"] else tr(lang, "cfg_reactions_off")
@@ -1592,11 +1605,15 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
         if action.startswith("tell:"):
             try:
                 query, outgoing = action[5:].split("\x1f", 1)
-                report = await agent.tell("tg", chat_id, message.chat.type == "private",
+                result = await agent.tell("tg", chat_id, message.chat.type == "private",
                                           user_id, query, outgoing)
+                report = None
+                if not result.get("ok") or not clean_segments:
+                    report = await agent.describe_tell("tg", chat_id, user_id, result)
             except ValueError:
                 report = "не понял, кому и что отправить"
-            agent_reports.append(report)
+            if report:
+                agent_reports.append(report)
         elif action.startswith("notify_owner:"):
             await agent.notify_owner(
                 f"⚠️ {display_name} (tg:{user_id}, чат {chat_id}): "
@@ -1778,7 +1795,7 @@ async def should_random_reply(platform: str, chat_id: int, user_id: int) -> bool
     cfg = get_user_config(platform, chat_id, user_id)
     if not cfg.get("random_reply_enabled", False):
         return False
-    if not agent.group_setting(platform, chat_id, "autonomous_enabled", True):
+    if not agent.autonomous_allowed(platform, chat_id):
         return False
     chat_key = f"{platform}_{chat_id}"
     now = time.time()

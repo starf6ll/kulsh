@@ -142,62 +142,148 @@ async def periodic_config_save_loop() -> None:
 # ============================================================
 # ОСНОВНЫЕ ЦИКЛЫ
 # ============================================================
-async def random_post_loop() -> None:
-    while True:
-        await asyncio.sleep(random.randint(3600, 14400))
-        chat_key = f"tg_{TG_TARGET_CHAT}"
-        if not get_user_config("tg", TG_TARGET_CHAT, 0).get("random_messages_enabled", True):
+_last_autonomous: dict[str, float] = {}
+AUTONOMOUS_COOLDOWN = 7200
+
+
+async def _autonomous_candidates(platform: str) -> list[dict[str, Any]]:
+    """Все чаты, где бот имеет право писать сам: группы, каналы и личка."""
+    from src import chats
+    found: list[dict[str, Any]] = []
+    for entry in chats.all_chats():
+        if entry.get("platform") != platform:
             continue
-        if not agent.group_setting("tg", TG_TARGET_CHAT, "autonomous_enabled", True):
+        if entry.get("kind") not in ("group", "channel", "private"):
             continue
-        memory = get_chat_memory(chat_key)
-        try:
-            if memory and memory[-1].get("type") == "user" and time.time() - float(memory[-1].get("ts") or 0) < 600:
-                last_entry = memory[-1]
-                answer = await ask_ai_async(
-                    prompt=("Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно "
-                            "короткое сообщение. Если нет — ответь ровно 'НЕТ'."),
-                    context_type="observer",
-                    messages=memory_to_messages(memory),
-                    chat_id=TG_TARGET_CHAT, user_id=0, platform="tg",
+        chat_id = int(entry.get("id") or 0)
+        if not chat_id:
+            continue
+        if not agent.autonomous_allowed(platform, chat_id):
+            continue
+        if not get_user_config(platform, chat_id, 0).get("random_messages_enabled", True):
+            continue
+        found.append(entry)
+    return found
+
+
+async def _autonomous_post(platform: str, chat_id: int) -> None:
+    """Одна самостоятельная реплика бота в конкретном чате."""
+    chat_key = f"{platform}_{chat_id}"
+    memory = get_chat_memory(chat_key)
+    recent = bool(memory) and time.time() - float(memory[-1].get("ts") or 0) < 1800
+    try:
+        if recent:
+            answer = await ask_ai_async(
+                prompt=("Посмотри на историю чата. Если хочешь что-то добавить, пошутить или "
+                        "сказать своё мнение — напиши одно короткое сообщение. Если нет — ответь ровно 'НЕТ'."),
+                context_type="observer",
+                messages=memory_to_messages(memory),
+                chat_id=chat_id, user_id=0, platform=platform,
+            )
+        else:
+            answer = await ask_ai_async(
+                context_type="random", chat_id=chat_id, user_id=0, platform=platform,
+            )
+    except Exception as exc:
+        logger.info(f"autonomous ask {chat_key}: {exc}")
+        return
+    if not answer or not answer.strip() or answer.strip().upper() in ("НЕТ", "NO"):
+        return
+    segments, markers = process_ai_response(answer, separate_enabled=True)
+    if not segments:
+        return
+    clean = [strip_chat_emojis(scrub_stray_markers(seg)).strip() for seg in segments]
+    clean = [seg for seg in clean if seg]
+    if not clean:
+        return
+    await agent.deliver_message(platform, chat_id, answer, user_id=0)
+    for seg in clean:
+        add_bot_memory(chat_key, seg)
+    for marker_name in markers:
+        if marker_name == "sticker" and platform == "tg":
+            try:
+                await tg_bot.send_sticker(chat_id, random.choice(STICKER_POOL))
+            except Exception as exc:
+                logger.warning(f"autonomous sticker {chat_key}: {exc}")
+        elif marker_name.startswith("tell:"):
+            try:
+                query, outgoing = marker_name[5:].split("\x1f", 1)
+                result = await agent.tell(platform, chat_id, False, 0, query, outgoing)
+                report = await agent.describe_tell(platform, chat_id, 0, result)
+                if report:
+                    await agent._send_text(platform, chat_id, report)
+            except Exception as exc:
+                logger.warning(f"autonomous tell {chat_key}: {exc}")
+        elif marker_name.startswith("notify_owner:"):
+            try:
+                await agent.notify_owner(
+                    f"⚠️ Самостоятельное сообщение в {chat_key}: {marker_name.split(':', 1)[1].strip()}",
+                    source=f"notice:{chat_key}",
                 )
-            else:
-                continue
-            if not memory or memory[-1] is not last_entry:
-                continue
-            if not answer or not answer.strip() or answer.strip().upper() in ("НЕТ", "NO"):
-                continue
-            segments, markers = process_ai_response(answer, separate_enabled=True)
-            for seg in segments:
-                seg = scrub_stray_markers(seg)
-                seg = strip_chat_emojis(seg)
-                if not seg:
+            except Exception as exc:
+                logger.warning(f"autonomous notify {chat_key}: {exc}")
+
+
+async def random_post_loop() -> None:
+    """Самостоятельные сообщения во всех группах Telegram, где бот состоит."""
+    while True:
+        await asyncio.sleep(random.randint(1800, 3600))
+        try:
+            candidates = await _autonomous_candidates("tg")
+            random.shuffle(candidates)
+            for entry in candidates:
+                chat_id = int(entry.get("id") or 0)
+                if time.time() - _last_autonomous.get(f"tg_{chat_id}", 0) < AUTONOMOUS_COOLDOWN:
                     continue
-                await send_tg_html(TG_TARGET_CHAT, seg)
-                add_bot_memory(chat_key, seg)
-            for m in markers:
-                if m == "sticker":
+                chance = 0.15 if entry.get("kind") == "private" else 0.6
+                if random.random() > chance:
+                    continue
+                _last_autonomous[f"tg_{chat_id}"] = time.time()
+                await _autonomous_post("tg", chat_id)
+        except Exception as exc:
+            logger.info(f"random_post_loop: {exc}")
+
+
+async def ds_autonomous_loop() -> None:
+    """Самостоятельные сообщения во всех каналах Discord, где бот на сервере."""
+    if ds_bot is None:
+        return
+    try:
+        await ds_bot.wait_until_ready()
+    except Exception:
+        pass
+    try:
+        from src import chats
+        for guild in getattr(ds_bot, "guilds", []) or []:
+            target = getattr(guild, "system_channel", None)
+            if target is None:
+                for channel in list(getattr(guild, "text_channels", []) or [])[:10]:
                     try:
-                        await tg_bot.send_sticker(TG_TARGET_CHAT, random.choice(STICKER_POOL))
-                    except Exception as e:
-                        logger.warning(f"random_post sticker: {e}")
-                elif m.startswith("tell:"):
-                    try:
-                        query, outgoing = m[5:].split("\x1f", 1)
-                        report = await agent.tell("tg", TG_TARGET_CHAT, True, 0, query, outgoing)
-                        await send_tg_html(TG_TARGET_CHAT, report)
-                    except Exception as e:
-                        logger.warning(f"random_post tell: {e}")
-                elif m.startswith("notify_owner:"):
-                    try:
-                        await agent.notify_owner(
-                            f"⚠️ Автономное сообщение: {m.split(':', 1)[1].strip()}",
-                            source=f"notice:tg:{TG_TARGET_CHAT}",
-                        )
-                    except Exception as e:
-                        logger.warning(f"random_post notify: {e}")
-        except Exception as e:
-            logger.info(f"random_post_loop: {e}")
+                        if channel.permissions_for(guild.me).send_messages:
+                            target = channel
+                            break
+                    except Exception:
+                        continue
+            if target is not None:
+                chats.register("ds", target.id, "channel", guild.name, guild.id)
+    except Exception as exc:
+        logger.info(f"ds_autonomous seed: {exc}")
+    while True:
+        await asyncio.sleep(random.randint(1800, 3600))
+        try:
+            candidates = await _autonomous_candidates("ds")
+            random.shuffle(candidates)
+            for entry in candidates:
+                chat_id = int(entry.get("id") or 0)
+                if time.time() - _last_autonomous.get(f"ds_{chat_id}", 0) < AUTONOMOUS_COOLDOWN:
+                    continue
+                chance = 0.15 if entry.get("kind") == "private" else 0.6
+                if random.random() > chance:
+                    continue
+                _last_autonomous[f"ds_{chat_id}"] = time.time()
+                await _autonomous_post("ds", chat_id)
+        except Exception as exc:
+            logger.info(f"ds_autonomous_loop: {exc}")
 
 
 async def series_reminder_loop() -> None:

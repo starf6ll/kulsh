@@ -94,9 +94,32 @@ def set_group_setting(platform: str, chat_id: int, name: str, value: bool) -> No
 
 
 def cross_chat_allowed(platform: str, chat_id: int, is_private: bool) -> bool:
+    """Можно ли доставлять сообщения В этот чат из других чатов.
+
+    Личка всегда открыта, группа/канал — по настройке её админов.
+    """
     if is_private:
         return True
     return group_setting(platform, chat_id, "cross_chat_enabled", False)
+
+
+def autonomous_allowed(platform: str, chat_id: int) -> bool:
+    """Может ли бот писать в этот чат сам, без просьбы участников."""
+    return group_setting(platform, chat_id, "autonomous_enabled", True)
+
+
+OWNER_ALIASES = frozenset({
+    "фолз", "фолзу", "фолза", "фолзе", "фоллз", "фоллзу", "фоллза", "фоллзе",
+    "lolfall", "starf6ll", "starfall", "богдан", "богдану", "богдана",
+})
+
+
+def owner_id(platform: str) -> int:
+    if platform == "tg":
+        return int(PREMIUM_ADMIN_ID or 0)
+    from src.billing import SUPPORT_ADMIN_DS
+    from src.util import AUTHORIZED_UPDATERS
+    return int(SUPPORT_ADMIN_DS or (AUTHORIZED_UPDATERS[0] if AUTHORIZED_UPDATERS else 0))
 
 
 def find_contacts(platform: str, query: str) -> list[dict[str, Any]]:
@@ -106,6 +129,12 @@ def find_contacts(platform: str, query: str) -> list[dict[str, Any]]:
     query = query.lstrip("@").casefold()
     if not query:
         return []
+    if query in OWNER_ALIASES:
+        oid = owner_id(platform)
+        if oid:
+            return [_contacts.get(_key(platform, oid)) or {
+                "platform": platform, "id": oid, "display": "Фолз", "username": "lolfall",
+            }]
     exact: list[dict[str, Any]] = []
     partial: list[dict[str, Any]] = []
     for entry in _contacts.values():
@@ -121,21 +150,133 @@ def find_contacts(platform: str, query: str) -> list[dict[str, Any]]:
 
 
 async def send_dm(platform: str, user_id: int, text: str) -> bool:
+    return await _send_text(platform, int(user_id), text, dm=True)
+
+
+async def find_targets(platform: str, query: str) -> list[dict[str, Any]]:
+    """Люди из контактов и известные группы/каналы — всё, куда можно написать."""
+    from src import chats
+    targets = [{**item, "kind": "user"} for item in find_contacts(platform, query)]
+    for entry in chats.find(platform, query):
+        targets.append({**entry, "kind": "chat"})
+    return targets
+
+
+async def _send_text(platform: str, chat_id: int, text: str, *, dm: bool = False) -> bool:
+    if not (text or "").strip():
+        return True
     try:
         if platform == "tg":
             from src.telegram import tg_bot
-            await tg_bot.send_message(int(user_id), text[:4000])
+            await tg_bot.send_message(int(chat_id), text[:4000])
             return True
         if platform == "ds":
             from src.discord_cmds import ds_bot
-            user = ds_bot.get_user(int(user_id))
-            if user is None:
-                user = await ds_bot.fetch_user(int(user_id))
-            await user.send(text[:1900])
+            if dm:
+                user = ds_bot.get_user(int(chat_id)) or await ds_bot.fetch_user(int(chat_id))
+                await user.send(text[:1900])
+            else:
+                channel = ds_bot.get_channel(int(chat_id))
+                if channel is None:
+                    channel = await ds_bot.fetch_channel(int(chat_id))
+                await channel.send(text[:1900])
             return True
     except Exception as exc:
-        logger.info(f"agent DM {platform}:{user_id} failed: {type(exc).__name__}: {exc}")
+        logger.info(f"agent send {platform}:{chat_id} failed: {type(exc).__name__}: {exc}")
     return False
+
+
+async def _send_photo(platform: str, chat_id: int, png: bytes, caption: str = "",
+                      *, dm: bool = False) -> bool:
+    try:
+        if platform == "tg":
+            from src.telegram import tg_bot
+            await tg_bot.send_photo(int(chat_id), png, caption=(caption or "")[:1000])
+            return True
+        if platform == "ds":
+            import io
+            import discord
+            from src.discord_cmds import ds_bot
+            file = discord.File(fp=io.BytesIO(png), filename="drawing.png")
+            if dm:
+                user = ds_bot.get_user(int(chat_id)) or await ds_bot.fetch_user(int(chat_id))
+                await user.send(content=(caption or "")[:1900] or None, file=file)
+            else:
+                channel = ds_bot.get_channel(int(chat_id))
+                if channel is None:
+                    channel = await ds_bot.fetch_channel(int(chat_id))
+                await channel.send(content=(caption or "")[:1900] or None, file=file)
+            return True
+    except Exception as exc:
+        logger.info(f"agent photo {platform}:{chat_id} failed: {type(exc).__name__}: {exc}")
+    return False
+
+
+async def _outgoing_image(platform: str, chat_id: int, user_id: int,
+                          spec: dict[str, Any] | None, prompt: str) -> bytes | None:
+    """Картинка для межчатового/самостоятельного сообщения: !image, затем Paint."""
+    from src.image_gen import generate_for_user, image_can_generate
+    from src.util import get_user_config
+    cfg = get_user_config(platform, chat_id, user_id)
+    choice = cfg.get("image_model", "auto")
+    if spec is not None and choice != "paint" and image_can_generate(platform, user_id, choice):
+        try:
+            png = await generate_for_user(platform, user_id, choice, spec, None)
+            if png:
+                return png
+        except Exception as exc:
+            logger.info(f"agent image {platform}:{chat_id}: {exc}")
+    try:
+        from src.ai import ask_paint
+        from src.draw import process_drawing
+        raw = await ask_paint(prompt or "нарисуй картинку", platform, chat_id, user_id)
+        result = await process_drawing(raw or "")
+        if result.png is not None:
+            return result.png.getvalue()
+    except Exception as exc:
+        logger.info(f"agent paint {platform}:{chat_id}: {exc}")
+    return None
+
+
+async def deliver_message(platform: str, chat_id: int, text: str, *, user_id: int = 0,
+                          dm: bool = False) -> bool:
+    """Отправить сообщение, обработав !separate, !image и !draw."""
+    from src.image_gen import extract_image_parts
+    from src.util import process_ai_response, scrub_stray_markers, take_reply_target
+
+    try:
+        spec, before, after = extract_image_parts(text or "")
+    except Exception:
+        spec, before, after = None, text, ""
+    body = before if spec is not None else (text or "")
+
+    draw_png: bytes | None = None
+    if "!draw" in body or "<svg" in body.lower():
+        try:
+            from src.draw import process_drawing
+            result = await process_drawing(body)
+            if result.png is not None:
+                draw_png = result.png.getvalue()
+                body = " ".join(part for part in (result.before, result.after) if part)
+        except Exception as exc:
+            logger.info(f"agent draw {platform}:{chat_id}: {exc}")
+
+    segments, _markers = process_ai_response(body or "", separate_enabled=True)
+    ok = True
+    for segment in segments:
+        segment, _reply_target = take_reply_target(segment)
+        segment = scrub_stray_markers(segment).strip()
+        if segment:
+            ok = await _send_text(platform, chat_id, segment, dm=dm) and ok
+
+    caption = scrub_stray_markers(after or "").strip()
+    if spec is not None:
+        png = await _outgoing_image(platform, chat_id, user_id, spec, before or text)
+        if png:
+            ok = await _send_photo(platform, chat_id, png, caption, dm=dm) and ok
+    elif draw_png:
+        ok = await _send_photo(platform, chat_id, draw_png, caption, dm=dm) and ok
+    return ok
 
 
 async def notify_owner(text: str, *, unblock: tuple[str, int] | None = None,
@@ -182,30 +323,64 @@ async def notify_owner(text: str, *, unblock: tuple[str, int] | None = None,
         logger.warning(f"agent owner DS alert: {exc}")
 
 
+async def describe_tell(platform: str, chat_id: int, user_id: int, result: dict[str, Any]) -> str:
+    """Let the model word the outcome of a tell action in the bot's own voice."""
+    from src.ai import ask_ai_async
+    facts = json.dumps(result, ensure_ascii=False)
+    prompt = (
+        "Ты только что выполнил просьбу передать сообщение. Результат действия "
+        f"(JSON): {facts}. Коротко, своими словами, в своём стиле сообщи пользователю, что вышло. "
+        "Если ok=false — объясни причину по-человечески (например, человека или чат не нашёл и попроси уточнить "
+        "название; или несколько похожих — попроси уточнить; или админы чата запретили приём сообщений). "
+        "Не пиши технических терминов и не упоминай JSON."
+    )
+    try:
+        text = await ask_ai_async(prompt=prompt, context_type="default",
+                                  chat_id=chat_id, user_id=user_id, platform=platform)
+    except Exception as exc:
+        logger.warning(f"agent describe_tell: {exc}")
+        return ""
+    return (text or "").strip()
+
+
 async def tell(platform: str, chat_id: int, is_private: bool, requester_id: int,
-               query: str, text: str) -> str:
-    """Resolve a person from the bot's actual contacts and send one private message."""
-    from src.util import scrub_stray_markers
-    text = scrub_stray_markers(text)
-    if not cross_chat_allowed(platform, chat_id, is_private):
-        return "в этом чате межчатовые сообщения выключены админом"
+               query: str, text: str) -> dict[str, Any]:
+    """Передать сообщение человеку в личку или в другой чат.
+
+    Возвращает структурированный результат: человеческую фразу формулирует модель.
+    """
+    text = text or ""
     if not query.strip() or not text.strip():
-        return "не понял, кому и что отправить"
+        return {"ok": False, "reason": "empty", "query": query.strip()[:40]}
     target_platform = platform
     stripped_query = query.strip()
     if stripped_query.lower().startswith(("tg:", "ds:")):
         target_platform = stripped_query[:2].lower()
         query = stripped_query[3:].strip()
-    matches = find_contacts(target_platform, query)
-    unique = {str(item.get("id")): item for item in matches}
+    matches = await find_targets(target_platform, query)
+    unique: dict[str, dict[str, Any]] = {}
+    for item in matches:
+        unique[f"{item.get('kind')}:{item.get('id')}"] = item
     if not unique:
-        return f"не нашёл личного чата с «{query.strip()[:40]}». пусть человек сначала напишет боту в лс"
+        return {"ok": False, "reason": "not_found", "query": query.strip()[:40]}
     if len(unique) > 1:
-        return f"нашёл нескольких похожих на «{query.strip()[:40]}», уточни ник"
-    contact = next(iter(unique.values()))
-    ok = await send_dm(target_platform, int(contact["id"]), text)
-    name = str(contact.get("display") or contact.get("username") or contact["id"])
+        names = [str(item.get("display") or item.get("title") or item.get("id"))[:40]
+                 for item in unique.values()][:5]
+        return {"ok": False, "reason": "ambiguous", "query": query.strip()[:40], "candidates": names}
+    target = next(iter(unique.values()))
+    target_id = int(target["id"])
+    if target.get("kind") == "chat":
+        name = str(target.get("title") or target_id)
+        if not cross_chat_allowed("tg" if target.get("platform") == "tg" else "ds", target_id, False):
+            return {"ok": False, "reason": "cross_chat_disabled", "name": name}
+        ok = await deliver_message(target_platform, target_id, text, user_id=requester_id)
+        logger.info(f"agent tell {platform}:{requester_id} -> chat {target_platform}:{target_id} ok={ok}")
+        if ok:
+            return {"ok": True, "name": name, "target": "chat"}
+        return {"ok": False, "reason": "send_failed", "name": name, "target": "chat"}
+    name = str(target.get("display") or target.get("username") or target_id)
+    ok = await deliver_message(target_platform, target_id, text, user_id=requester_id, dm=True)
     if ok:
-        logger.info(f"agent tell {platform}:{requester_id} -> {target_platform}:{contact['id']}")
-        return f"отправил {name} в лс"
-    return f"не смог написать {name}: возможно, человек ещё не открывал лс с ботом"
+        logger.info(f"agent tell {platform}:{requester_id} -> {target_platform}:{target_id}")
+        return {"ok": True, "name": name, "target": "dm"}
+    return {"ok": False, "reason": "dm_failed", "name": name, "target": "dm"}

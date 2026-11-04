@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-from src.image_gen import image_model_label
+from src.image_gen import IMAGE_MODEL_CHOICES, IMAGE_MODEL_HINTS, image_model_label
 from src.util import (
     DONATE_URL,
     GITHUB_URL,
@@ -92,7 +92,7 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"**{tr(lang, 'cfg_section_content')}**\n\n"
         f"{tr(lang, 'cfg_websearch')}: {search_txt}\n"
         f"{tr(lang, 'cfg_drawing')}: {on if cfg.get('drawing_enabled', True) else off}\n"
-        f"Модель изображений / Image model: {image_model_label(cfg.get('image_model', 'auto'))}\n"
+        f"{tr(lang, 'cfg_image_model')}: {image_model_label(cfg.get('image_model', 'auto'), lang)}\n"
         f"{tr(lang, 'cfg_sep')}: {on if cfg.get('separate_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_stream')}: {stream_txt}\n\n"
         f"{line}\n\n"
@@ -130,8 +130,8 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int,
         btn(f"{tr(lang, 'cfg_drawing')}: {'✅' if cfg.get('drawing_enabled', True) else '❌'}",
             style=None, callback_data=cb("drawing")),
     )
-    kb.row(btn(f"🎨 {image_model_label(cfg.get('image_model', 'auto'))}",
-               callback_data=cb("image_model")))
+    kb.row(btn(f"🎨 {tr(lang, 'cfg_image_model')}: {image_model_label(cfg.get('image_model', 'auto'), lang)}",
+               style=None, callback_data=cb("image_model")))
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_sep')}: {'✅' if cfg.get('separate_enabled', True) else '❌'}",
             style=None, callback_data=cb("separate")),
@@ -151,7 +151,7 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int,
     )
     if show_group_settings:
         kb.row(  # pyright: ignore[reportUnknownMemberType]
-            btn(f"🌐 Межчатовые сообщения: {'✅' if group_cross else '❌'}",
+            btn(f"🌐 Приём сообщений из других чатов: {'✅' if group_cross else '❌'}",
                 style=None, callback_data=cb("group_cross")),
         )
         kb.row(  # pyright: ignore[reportUnknownMemberType]
@@ -267,6 +267,33 @@ def build_theme_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKey
         btn(f"{'🔘' if cur == 'light' else '▫️'} {'Светлая ☀️' if lang == 'ru' else 'Light ☀️'}",
             style="primary" if cur == "light" else None, callback_data=cb("theme_set", "light")),
     )
+    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data=cb("sub_back")))  # pyright: ignore[reportUnknownMemberType]
+    return kb
+
+
+def image_model_text(platform: str, chat_id: int, user_id: int) -> str:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    current = cfg.get("image_model", "auto")
+    lines = [f"# {tr(lang, 'cfg_image_model')}", "", "---", ""]
+    lines.append(f"**{tr(lang, 'cfg_current')}:** {image_model_label(current, lang)}")
+    lines.append("")
+    hints = IMAGE_MODEL_HINTS.get(lang, IMAGE_MODEL_HINTS["ru"])
+    for choice in IMAGE_MODEL_CHOICES:
+        lines.append(f"• **{image_model_label(choice, lang)}** — {hints[choice]}")
+    return "\n".join(lines)
+
+
+def build_image_model_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    current = cfg.get("image_model", "auto")
+    cb = lambda action, *args: _cfg_cb(user_id, action, *args)  # noqa: E731
+    kb = InlineKeyboardMarkup()
+    for choice in IMAGE_MODEL_CHOICES:
+        mark = "🔘" if current == choice else "▫️"
+        kb.row(btn(f"{mark} {image_model_label(choice, lang)}", style=None,
+                   callback_data=cb("image_set", choice)))  # pyright: ignore[reportUnknownMemberType]
     kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data=cb("sub_back")))  # pyright: ignore[reportUnknownMemberType]
     return kb
 

@@ -26,16 +26,40 @@ from src.util import (
 IMAGE_DAILY_LIMIT = 2
 IMAGE_API_BASE = "https://api.etage.one/v1"
 IMAGE_MODEL = "gpt-image-2.5-flare"
+IMAGE_MODEL_CHOICES = ("auto", "flare", "sunburst", "paint")
 IMAGE_MODEL_LABELS = {
-    "auto": "🎲 auto",
-    "flare": "gpt-image-2.5-flare",
-    "sunburst": "gpt-image-2.5-sunburst",
-    "paint": "Kulsh Paint 1.1",
+    "ru": {
+        "auto": "🎲 Авто",
+        "flare": "GPT Image 2.5 Flare",
+        "sunburst": "GPT Image 2.5 Sunburst",
+        "paint": "Kulsh Paint 1.1",
+    },
+    "en": {
+        "auto": "🎲 Auto",
+        "flare": "GPT Image 2.5 Flare",
+        "sunburst": "GPT Image 2.5 Sunburst",
+        "paint": "Kulsh Paint 1.1",
+    },
+}
+IMAGE_MODEL_HINTS = {
+    "ru": {
+        "auto": "Flare, пока есть бесплатные; потом Paint",
+        "flare": "2 бесплатных в день, затем 3 ₽",
+        "sunburst": "4 ₽ за картинку",
+        "paint": "бесплатно, рисует текстовая модель",
+    },
+    "en": {
+        "auto": "Flare while free, then Paint",
+        "flare": "2 free per day, then 3 ₽",
+        "sunburst": "4 ₽ per image",
+        "paint": "free, drawn by a text model",
+    },
 }
 
 
-def image_model_label(choice: str | None) -> str:
-    return IMAGE_MODEL_LABELS.get(choice or "auto", str(choice or "auto"))
+def image_model_label(choice: str | None, lang: str = "ru") -> str:
+    labels = IMAGE_MODEL_LABELS.get(lang, IMAGE_MODEL_LABELS["ru"])
+    return labels.get(choice or "auto", labels["auto"])
 
 # Внутренние фразы для сообщения прогресса. Ровно 10, строчными буквами,
 # простая разговорная речь без переигрывания.

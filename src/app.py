@@ -103,6 +103,19 @@ def register_telegram() -> None:
                     getattr(user, "username", "") or "",
                     getattr(message.chat, "type", "") == "private",
                 )
+            chat = getattr(message, "chat", None)
+            if chat is not None:
+                try:
+                    from src import chats
+                    chat_type = getattr(chat, "type", "") or "private"
+                    kind = "private" if chat_type == "private" else "group"
+                    title = ((getattr(chat, "title", "") or "")
+                             or " ".join(filter(None, [getattr(chat, "first_name", "") or "",
+                                                       getattr(chat, "last_name", "") or ""]))
+                             or (getattr(chat, "username", "") or ""))
+                    chats.register("tg", chat.id, kind, title)
+                except Exception:
+                    pass
             return await fn(message, *args, **kwargs)
         return wrapped
 
@@ -237,7 +250,7 @@ def _smoke_check() -> None:  # pyright: ignore[reportUnusedFunction]
 
     _need(loops, "bind")
 
-    for optional_name in ("random_post_loop", "series_reminder_loop",
+    for optional_name in ("random_post_loop", "ds_autonomous_loop", "series_reminder_loop",
                           "donation_alerts_listener", "periodic_config_save_loop"):
         if getattr(loops, optional_name, None) is None:
             print(f"WARN: loops.{optional_name} отсутствует — соответствующая функция отключена")
@@ -260,6 +273,9 @@ async def main() -> None:
         asyncio.create_task(loops.random_post_loop())
     else:
         logger.warning("random_post_loop отсутствует — пропускаю")
+
+    if callable(getattr(loops, "ds_autonomous_loop", None)):
+        asyncio.create_task(loops.ds_autonomous_loop())
 
     if callable(getattr(loops, "periodic_config_save_loop", None)):
         asyncio.create_task(loops.periodic_config_save_loop())
