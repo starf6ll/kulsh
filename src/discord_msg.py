@@ -584,9 +584,9 @@ async def on_message(message: discord.Message) -> None:
             messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
             answer = await ask_ai_async(messages=messages, chat_id=chat_id,
                                         user_id=user_id, platform="ds")
-            await send_ds_ai_response(message, chat_id, user_id, answer, user_text=message.content)
-            asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: {message.content}", answer,
-                                               platform="ds", user_id=user_id, source_chat_id=chat_id))
+        await send_ds_ai_response(message, chat_id, user_id, answer, user_text=message.content)
+        asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: {message.content}", answer,
+                                           platform="ds", user_id=user_id, source_chat_id=chat_id))
         return
 
     add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id, message.content, message_id=message.id)

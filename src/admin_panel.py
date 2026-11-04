@@ -11,6 +11,8 @@ import json
 import os
 import re
 import time
+import sys
+from io import StringIO
 from datetime import datetime
 from typing import Any
 
@@ -37,6 +39,40 @@ ADMIN_DS_IDS = {uid for uid in AUTHORIZED_UPDATERS if uid} | ({SUPPORT_ADMIN_DS}
 _wait: dict[int, dict[str, Any]] = {}
 _albums: dict[str, list[int]] = {}
 _ds_albums: dict[str, list[Any]] = {}
+
+
+def _update_env_secrets(text: str) -> None:
+    """Merge secret entries without echoing them. Existing connections may need restart."""
+    from dotenv import dotenv_values, set_key
+    from src import util
+    if not text.strip() or len(text) > 65536:
+        raise ValueError("invalid input")
+    if "=" not in text and "\n" not in text:
+        values = {"ETAGEONE_API_KEY": text.strip()}
+    else:
+        parsed = dotenv_values(stream=StringIO(text), interpolate=False)
+        values = {k: v for k, v in parsed.items()
+                  if re.fullmatch(r"[A-Z][A-Z0-9_]*", k or "")
+                  and re.search(r"(?:KEY|TOKEN)(?:_\d+)?$", k or "")
+                  and isinstance(v, str) and v and "\n" not in v and "\r" not in v}
+    if not values:
+        raise ValueError("no secret entries")
+    path = os.path.join(util.BASE_DIR, ".env")
+    for key, value in values.items():
+        set_key(path, key, value)
+        os.environ[key] = value
+        # The project imports constants by value in several modules.
+        for module in list(sys.modules.values()):
+            if module and getattr(module, "__name__", "").startswith("src.") and hasattr(module, key):
+                setattr(module, key, value)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    keys = [os.getenv(k) for k in ("AI_KEY_1", "AI_KEY_2", "AI_KEY_3") if os.getenv(k)]
+    if not keys and os.getenv("AI_KEY"):
+        keys = [os.environ["AI_KEY"]]
+    util.AI_KEYS[:] = keys
 
 
 def _load(path: str, default: Any) -> Any:
@@ -172,6 +208,7 @@ def _kb(bot_btn: Any) -> Any:
         bot_btn("Рассылка", callback_data="adm:cast"),
     )
     kb.row(bot_btn("🎁 Промокоды", callback_data="adm:promos"))  # pyright: ignore[reportUnknownMemberType]
+    kb.row(bot_btn("🔑 API-ключи", callback_data="adm:keys"))
     kb.row(bot_btn("Закрыть", style="danger", callback_data="adm:close"))  # pyright: ignore[reportUnknownMemberType]
     return kb
 
@@ -302,6 +339,27 @@ async def take_admin_input(bot: Any, message: Any) -> bool:
         await _wipe(bot, chat_id, message.message_id)
         return True
     step = state.get("step")
+    if step == "keys":
+        if user.id != PREMIUM_ADMIN_ID or getattr(message.chat, "type", "") != "private":
+            return False
+        try:
+            document = getattr(message, "document", None)
+            if document:
+                if (getattr(document, "file_size", 0) or 0) > 65536:
+                    raise ValueError("Файл слишком большой")
+                info = await bot.get_file(document.file_id)
+                raw = await bot.download_file(info.file_path)
+                text = raw.decode("utf-8-sig")
+            _update_env_secrets(text)
+            result = "Ключи сохранены. Подключённым клиентам может потребоваться перезапуск."
+        except Exception:
+            result = "Не удалось сохранить ключи. Проверь формат и права записи .env."
+        _wait.pop(user.id, None)
+        await _wipe(bot, chat_id, message.message_id)
+        if state.get("ask_id"):
+            from src.ui import btn
+            await _edit_tg(bot, chat_id, int(state["ask_id"]), result, _kb(btn))
+        return True
     if step in ("block", "unblock", "topup"):
         parsed = _parse_target(text)
         ask_id = state.get("ask_id")
@@ -441,6 +499,14 @@ async def on_tg_callback(bot: Any, call: Any) -> None:
         await bot.answer_callback_query(call.id)
     except Exception:
         pass
+    if action == "keys":
+        if user_id != PREMIUM_ADMIN_ID or getattr(msg.chat, "type", "") != "private":
+            return
+        _wait[user_id] = {"step": "keys", "ask_id": msg.message_id}
+        await _edit_tg(bot, chat_id, msg.message_id,
+                       "Пришли .env файлом, строки KEY=значение или один ключ Etage. "
+                       "Ключи сохраняются на сервере; /cancel — отмена.", _kb(btn))
+        return
     if action in ("home",):
         _wait.pop(user_id, None)
         await _edit_tg(bot, chat_id, msg.message_id, home_text(), _kb(btn))
@@ -600,6 +666,12 @@ class DsAdminView:
                 "Пришли сообщение для рассылки. Оформление, вложения и эмодзи сохранятся. Отмена — /cancel.",
             )
 
+        async def _keys(interaction: Any) -> None:
+            if not SUPPORT_ADMIN_DS or interaction.user.id != SUPPORT_ADMIN_DS or interaction.guild is not None:
+                await interaction.response.send_message("Доступно владельцу только в личных сообщениях.", ephemeral=True)
+                return
+            await _ask(interaction, "keys", "Пришли .env файлом, KEY=значение или ключ Etage. Отмена — /cancel.")
+
         async def _promos(interaction: Any) -> None:
             view = discord.ui.View(timeout=300)
 
@@ -641,6 +713,9 @@ class DsAdminView:
         promos = discord.ui.Button(label="🎁 Промокоды", style=discord.ButtonStyle.secondary, row=1)
         promos.callback = _promos
         view.add_item(promos)
+        keys = discord.ui.Button(label="🔑 API-ключи", style=discord.ButtonStyle.secondary, row=2)
+        keys.callback = _keys
+        view.add_item(keys)
         return view
 
 
@@ -659,6 +734,26 @@ async def take_admin_ds(message: Any) -> bool:
             pass
         return True
     step = state.get("step")
+    if step == "keys":
+        if not SUPPORT_ADMIN_DS or message.author.id != SUPPORT_ADMIN_DS or message.guild is not None:
+            return False
+        try:
+            attachments = message.attachments
+            if attachments:
+                if attachments[0].size > 65536:
+                    raise ValueError("file too large")
+                text = (await attachments[0].read()).decode("utf-8-sig")
+            _update_env_secrets(text)
+            result = "Ключи сохранены. Подключённым клиентам может потребоваться перезапуск."
+        except Exception:
+            result = "Не удалось сохранить ключи. Проверь формат и права записи .env."
+        _wait.pop(message.author.id, None)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.channel.send(result)
+        return True
     if step in ("block", "unblock", "topup"):
         parsed = _parse_target(text)
         if not parsed or (step == "topup" and parsed[2] is None):

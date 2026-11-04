@@ -468,8 +468,9 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     logger.warning(f"ds image edit ref: {e}")
                 refs.extend(recent_generated_images(f"ds_{chat_id}", 4))
             refs = dedupe_refs(refs, 4)
-            left = image_remaining("ds", user_id)
-            if left > 0:
+            from src.image_gen import generate_for_user, image_can_generate
+            image_choice = cfg.get("image_model", "auto")
+            if image_can_generate("ds", user_id, image_choice):
                 phrase = random_progress_phrase()
                 status = None
 
@@ -483,9 +484,8 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
 
                 try:
                     status = await message.reply(f"🎨🗿 {phrase} | 0%")
-                    png_bytes = await generate_image(image_spec, refs, progress_cb=_update_progress)
+                    png_bytes = await generate_for_user("ds", user_id, image_choice, image_spec, refs, progress_cb=_update_progress)
                     if png_bytes:
-                        consume_image("ds", user_id)
                         draw_png = BytesIO(png_bytes)
                         draw_before, draw_after = image_before, image_after
                         draw_generated = True
@@ -502,23 +502,14 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                             pass
             else:
                 try:
-                    manual_prompt = (
-                        f"Пользователь просит: {orig_user_text or 'нарисуй картинку'}\n\n"
-                        "Лимит нормальных генераций на сегодня исчерпан. Нарисуй это вручную через !draw. "
-                        "Ответь ТОЛЬКО блоком !draw с JSON, без текста до и после. "
-                        "Подбери размеры и композицию сам."
-                    )
-                    manual_raw = await ask_ai_async(
-                        prompt=manual_prompt,
-                        image_bytes_list=refs or None,
-                        image_mime_list=(["image/png"] * len(refs)) if refs else None,
-                        chat_id=chat_id, user_id=user_id, platform="ds",
-                    )
+                    from src.ai import ask_paint
+                    manual_raw = await ask_paint(orig_user_text or str(image_spec.get("prompt", "")),
+                                                 "ds", chat_id, user_id)
                     mres = await process_drawing(manual_raw or "")
                     if mres.png is not None:
                         draw_png = mres.png
                         draw_before = _manual_note(
-                            image_before, tr(lang, "image_limit_manual"), mres.before
+                            image_before, "Kulsh Paint 1.1", mres.before
                         )
                         draw_after = mres.after
                     else:
@@ -528,7 +519,9 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_limit_out")
         elif "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
             try:
-                res = await process_drawing(answer_raw or "")
+                from src.ai import ask_paint
+                paint_raw = await ask_paint(orig_user_text or "нарисуй картинку", "ds", chat_id, user_id)
+                res = await process_drawing(paint_raw)
                 draw_png, draw_before, draw_after = res.png, res.before, res.after
                 if res.status:
                     logger.info(f"🎨 draw terminal: {res.status}")
@@ -833,6 +826,7 @@ class DsConfigView(discord.ui.View):
             discord.SelectOption(label=f"{tr(lang, 'cfg_reactions')}: {b('reactions_enabled')}", value="reactions_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_websearch')}: {b('web_search_enabled')}", value="web_search_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_drawing')}: {b('drawing_enabled')}", value="drawing_enabled"),
+            discord.SelectOption(label=f"🎨 Image model: {cfg.get('image_model', 'auto')}", value="image_model"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_stickers')}: {b('stickers_enabled')}", value="stickers_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_autoreply')}: {b('random_reply_enabled', False)}", value="random_reply_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_random')}: {b('random_messages_enabled')}", value="random_messages_enabled"),
@@ -924,6 +918,14 @@ class DsConfigView(discord.ui.View):
         if value == "prompt":
             await self._on_prompt(interaction)
             return
+        if value == "image_model":
+            cfg = self._write()
+            choices = ("auto", "flare", "sunburst", "paint")
+            current = cfg.get("image_model", "auto")
+            cfg["image_model"] = choices[(choices.index(current) + 1) % len(choices)] if current in choices else "auto"
+            save_user_configs()
+            await self._refresh_main(interaction)
+            return
         if value in ("lang", "theme", "mode", "model"):
             await self._open_choice(interaction, value)
             return
@@ -965,7 +967,7 @@ class DsConfigView(discord.ui.View):
             return
         lang = self._lang()
         from src.util import long_term_memory, save_long_term_memory
-        long_term_memory.pop(str(self.chat_id), None)
+        long_term_memory.pop(f"ds_{self.chat_id}", None)
         try:
             save_long_term_memory(long_term_memory)
         except Exception:

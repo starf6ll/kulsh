@@ -310,10 +310,10 @@ MODEL_LIST = [m for _company, _models in MODEL_GROUPS for m in _models]
 # NO_VISION_MODELS не пробуем, если в запросе есть картинка.
 # ============================================================
 AUTO_ORDER_FREE: list[str] = [
+    "gpt-6-luna",
     "glm-5.3-flash",
     "deepseek-v4.1-flash",
     "kimi-k3",
-    "gpt-6-luna",
     "claude-haiku-5-5",
     "gpt-6.1-terra",
     "gpt-6.1-sol",
@@ -404,7 +404,7 @@ def model_cost_rub(model: str, usage: dict[str, Any] | None) -> float:
 
 def model_display_name(model: str | None, lang: str = "ru") -> str:
     if not model:
-        return "🎲 авто (все подряд)" if lang == "ru" else "🎲 auto (all models)"
+        return "🎲 авто (по сложности и балансу)" if lang == "ru" else "🎲 auto (task and balance)"
     if model.startswith("claude-"):
         parts = model.split("-")
         family = parts[1].capitalize() if len(parts) > 1 else "Claude"
@@ -1356,6 +1356,13 @@ _TIME_PREFIX_RE = re.compile(
     r'(?:(?:сегодня|today)\s*[,:\-—]?\s*)?'
 )
 
+# History-style timestamps can occur anywhere, not just at the start of a line.
+# Require brackets and a clock so ordinary references to time remain intact.
+_INLINE_HISTORY_TIME_RE = re.compile(
+    r'\[\s*\d{1,2}[:.]\d{2}(?::\d{2})?(?:\s*(?:МСК|MSK))?'
+    r'\s*(?:\([^\]\n]*\))?\s*\]', re.IGNORECASE,
+)
+
 
 def strip_time_prefixes(text: str, as_separator: bool = True) -> str:
     if not text:
@@ -1370,6 +1377,7 @@ def strip_time_prefixes(text: str, as_separator: bool = True) -> str:
         if in_code:
             out.append(line)
             continue
+        line = _INLINE_HISTORY_TIME_RE.sub('!separate' if as_separator else ' ', line)
         m = _TIME_PREFIX_RE.match(line)
         if not m:
             out.append(line)

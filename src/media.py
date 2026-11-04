@@ -8,6 +8,7 @@ import asyncio
 import html
 import re
 import time
+from contextlib import suppress
 from typing import Any
 
 from telebot import types as types
@@ -27,6 +28,15 @@ from src.looks import (
 def _tg() -> Any:
     from src import telegram as tg
     return tg
+
+
+async def _typing_until_cancelled(chat_id: int) -> None:
+    while True:
+        try:
+            await _tg().tg_bot.send_chat_action(chat_id, 'typing')
+        except Exception:
+            pass
+        await asyncio.sleep(4)
 
 
 def tg_bot_id() -> int | None:
@@ -683,10 +693,6 @@ async def handle_tg_text(message: types.Message) -> None:
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', text) or is_dm)
 
     if addressed:
-        try:
-            await _tg().tg_bot.send_chat_action(chat_id, 'typing')
-        except Exception:
-            pass
         # Если это реплай на сообщение с медиа — добавляем в память msg_id родителя
         parent_media_id = None
         if message.reply_to_message and message.reply_to_message.message_id:
@@ -699,11 +705,16 @@ async def handle_tg_text(message: types.Message) -> None:
         add_user_memory(chat_key, "TG", display_name, username, user_id, text_for_memory,
                         message_id=message.message_id)
         messages = memory_to_messages(get_chat_memory(chat_key))
-        answer = await ask_ai_async(messages=messages, chat_id=chat_id, user_id=user_id, platform="tg")
+        typing_task = asyncio.create_task(_typing_until_cancelled(chat_id))
+        try:
+            answer = await ask_ai_async(messages=messages, chat_id=chat_id, user_id=user_id, platform="tg")
+        finally:
+            typing_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await typing_task
         await _tg().send_tg_ai_response(message, chat_id, user_id, answer, user_text=text)
         asyncio.create_task(extract_memory(chat_key, f"{display_name}: {text}", answer,
                                            platform="tg", user_id=user_id, source_chat_id=chat_id))
-        asyncio.create_task(_tg().maybe_reply_to_old_message_tg(message, chat_id, user_id))
         return
 
     add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)

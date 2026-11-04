@@ -91,6 +91,7 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"**{tr(lang, 'cfg_section_content')}**\n\n"
         f"{tr(lang, 'cfg_websearch')}: {search_txt}\n"
         f"{tr(lang, 'cfg_drawing')}: {on if cfg.get('drawing_enabled', True) else off}\n"
+        f"Модель изображений / Image model: {cfg.get('image_model', 'auto')}\n"
         f"{tr(lang, 'cfg_sep')}: {on if cfg.get('separate_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_stream')}: {stream_txt}\n\n"
         f"{line}\n\n"
@@ -125,6 +126,8 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
         btn(f"{tr(lang, 'cfg_drawing')}: {'✅' if cfg.get('drawing_enabled', True) else '❌'}",
             style=None, callback_data=cb("drawing")),
     )
+    kb.row(btn(f"🎨 {cfg.get('image_model', 'auto')} (auto / flare / sunburst / paint)",
+               callback_data=cb("image_model")))
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_sep')}: {'✅' if cfg.get('separate_enabled', True) else '❌'}",
             style=None, callback_data=cb("separate")),

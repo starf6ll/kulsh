@@ -35,7 +35,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "cfg_choose_model":        ("🧠 Выбор модели", "🧠 Model selection"),
     "cfg_choose_mode":         ("🧩 Выбор режима общения", "🧩 Communication mode"),
     "cfg_current":             ("Текущая", "Current"),
-    "cfg_auto_hint":           ("перебор всех моделей", "try all models"),
+    "cfg_auto_hint":           ("по сложности и балансу", "task and balance"),
     "cfg_pick_company":        ("Выбери разработчика — модели откроются следующим шагом.", "Pick a developer — its models open next."),
     "cfg_pick_model":          ("Выбери модель этой компании.", "Pick a model from this company."),
     "cfg_section_main":        ("Основное", "General"),

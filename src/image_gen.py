@@ -23,7 +23,7 @@ from src.util import (
     msk_now,
 )
 
-IMAGE_DAILY_LIMIT = 3
+IMAGE_DAILY_LIMIT = 2
 IMAGE_API_BASE = "https://api.etage.one/v1"
 IMAGE_MODEL = "gpt-image-2.5-flare"
 
@@ -44,6 +44,37 @@ PROGRESS_PHRASES = (
 
 _image_usage: dict[str, dict[str, Any]] = {}
 _generated_images: dict[str, deque[dict[str, Any]]] = {}
+_image_locks: dict[str, asyncio.Lock] = {}
+
+
+def image_can_generate(platform: str, user_id: int, choice: str) -> bool:
+    from src.billing import get_balance
+    if choice == "paint":
+        return False
+    if choice == "sunburst":
+        return get_balance(platform, user_id) >= 4
+    return image_remaining(platform, user_id) > 0 or get_balance(platform, user_id) >= 3
+
+
+async def generate_for_user(platform: str, user_id: int, choice: str, spec: dict[str, Any],
+                            refs: list[bytes] | None = None,
+                            progress_cb: Callable[[int], Awaitable[None]] | None = None) -> bytes | None:
+    from src.billing import add_credit, charge_balance
+    async with _image_locks.setdefault(_usage_key(platform, user_id), asyncio.Lock()):
+        model = "gpt-image-2.5-sunburst" if choice == "sunburst" else IMAGE_MODEL
+        cost = 4 if choice == "sunburst" else (0 if image_remaining(platform, user_id) else 3)
+        if cost and not charge_balance(platform, user_id, cost, note=f"image:{model}"):
+            raise RuntimeError("insufficient image balance")
+        success = False
+        try:
+            result = await generate_image(spec, refs, progress_cb, model=model)
+            success = bool(result)
+            if success and cost == 0:
+                consume_image(platform, user_id)
+            return result
+        finally:
+            if cost and not success:
+                add_credit(platform, user_id, cost, note=f"image refund:{model}")
 
 
 def _load_usage() -> None:
@@ -253,6 +284,7 @@ async def generate_image(
     spec: dict[str, Any],
     refs: list[bytes] | None = None,
     progress_cb: Callable[[int], Awaitable[None]] | None = None,
+    model: str = IMAGE_MODEL,
 ) -> bytes | None:
     """Генерирует или редактирует изображение. Модель фиксирована внутри."""
     if not ETAGEONE_API_KEY:
@@ -275,7 +307,7 @@ async def generate_image(
         async with aiohttp.ClientSession(timeout=timeout) as session:
             if images:
                 form = aiohttp.FormData()
-                form.add_field("model", IMAGE_MODEL)
+                form.add_field("model", model)
                 form.add_field("prompt", prompt)
                 form.add_field("n", "1")
                 form.add_field("size", size)
@@ -298,7 +330,7 @@ async def generate_image(
                     payload = json.loads(body)
             else:
                 payload_req = {
-                    "model": IMAGE_MODEL,
+                    "model": model,
                     "prompt": prompt,
                     "n": 1,
                     "size": size,

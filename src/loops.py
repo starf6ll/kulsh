@@ -6,6 +6,7 @@
 
 import asyncio
 import random
+import time
 from typing import Any, cast
 
 import discord
@@ -145,7 +146,8 @@ async def random_post_loop() -> None:
         chat_key = f"tg_{TG_TARGET_CHAT}"
         memory = get_chat_memory(chat_key)
         try:
-            if memory:
+            if memory and memory[-1].get("type") == "user" and time.time() - float(memory[-1].get("ts") or 0) < 600:
+                last_entry = memory[-1]
                 answer = await ask_ai_async(
                     prompt=("Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно "
                             "короткое сообщение. Если нет — ответь ровно 'НЕТ'."),
@@ -154,8 +156,9 @@ async def random_post_loop() -> None:
                     chat_id=TG_TARGET_CHAT, user_id=0, platform="tg",
                 )
             else:
-                answer = await ask_ai_async(prompt=None, context_type="random",
-                                            chat_id=TG_TARGET_CHAT, user_id=0, platform="tg")
+                continue
+            if not memory or memory[-1] is not last_entry:
+                continue
             if not answer or not answer.strip() or answer.strip().upper() in ("НЕТ", "NO"):
                 continue
             segments, markers = process_ai_response(answer, separate_enabled=True)
