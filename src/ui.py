@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
+from src.image_gen import image_model_label
 from src.util import (
     DONATE_URL,
     GITHUB_URL,
@@ -91,7 +92,7 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"**{tr(lang, 'cfg_section_content')}**\n\n"
         f"{tr(lang, 'cfg_websearch')}: {search_txt}\n"
         f"{tr(lang, 'cfg_drawing')}: {on if cfg.get('drawing_enabled', True) else off}\n"
-        f"Модель изображений / Image model: {cfg.get('image_model', 'auto')}\n"
+        f"Модель изображений / Image model: {image_model_label(cfg.get('image_model', 'auto'))}\n"
         f"{tr(lang, 'cfg_sep')}: {on if cfg.get('separate_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_stream')}: {stream_txt}\n\n"
         f"{line}\n\n"
@@ -105,7 +106,10 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
     )
 
 
-def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+def build_main_config_keyboard(platform: str, chat_id: int, user_id: int,
+                               show_group_settings: bool = False,
+                               group_cross: bool = False,
+                               group_autonomous: bool = True) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     cb = lambda action, *args: _cfg_cb(user_id, action, *args)  # noqa: E731
@@ -126,7 +130,7 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
         btn(f"{tr(lang, 'cfg_drawing')}: {'✅' if cfg.get('drawing_enabled', True) else '❌'}",
             style=None, callback_data=cb("drawing")),
     )
-    kb.row(btn(f"🎨 {cfg.get('image_model', 'auto')} (auto / flare / sunburst / paint)",
+    kb.row(btn(f"🎨 {image_model_label(cfg.get('image_model', 'auto'))}",
                callback_data=cb("image_model")))
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_sep')}: {'✅' if cfg.get('separate_enabled', True) else '❌'}",
@@ -145,6 +149,15 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
             style=None, callback_data=cb("random")),
         btn(tr(lang, "cfg_edit_prompt"), style="primary", callback_data=cb("prompt")),
     )
+    if show_group_settings:
+        kb.row(  # pyright: ignore[reportUnknownMemberType]
+            btn(f"🌐 Межчатовые сообщения: {'✅' if group_cross else '❌'}",
+                style=None, callback_data=cb("group_cross")),
+        )
+        kb.row(  # pyright: ignore[reportUnknownMemberType]
+            btn(f"🤖 Самостоятельные сообщения: {'✅' if group_autonomous else '❌'}",
+                style=None, callback_data=cb("group_autonomous")),
+        )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(tr(lang, "cfg_reset_memory"), style="danger", callback_data=cb("reset_memory")),
         btn(tr(lang, "cfg_reset_prompt"), style="danger", callback_data=cb("reset_prompt")),

@@ -784,6 +784,7 @@ DEFAULT_USER_CONFIG = {
     "tools_enabled": False,
     "web_search_enabled": True,
     "drawing_enabled": True,
+    "image_model": "auto",
     "communication_mode": DEFAULT_COMMUNICATION_MODE,
     "reactions_enabled": True,
 }
@@ -927,7 +928,8 @@ def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]
         if age:
             stamp = f"{stamp} ({age})"
         if entry.get("type") == "bot":
-            messages.append({"role": "model", "text": f"[{stamp}] {entry.get('text', '')}"})
+            messages.append({"role": "model", "text": f"[{stamp}] {entry.get('text', '')}",
+                             "ts": entry.get("ts"), "message_id": entry.get("message_id")})
         else:
             uname = f"@{entry['username']}" if entry.get("username") else "no-username"
             media_str = ""
@@ -937,7 +939,8 @@ def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]
             mid_str = f", msg_id:{mid}" if mid else ""
             prefix = (f"[{stamp}] [{entry.get('platform','')}] "
                       f"{entry.get('display','?')} ({uname}, id:{entry.get('id','?')}{mid_str})")
-            messages.append({"role": "user", "text": f"{prefix}{media_str}: {entry.get('text','')}"})
+            messages.append({"role": "user", "text": f"{prefix}{media_str}: {entry.get('text','')}",
+                             "ts": entry.get("ts"), "message_id": entry.get("message_id")})
     return messages
 
 
@@ -1042,13 +1045,13 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
 # ============================================================
 # TYPING
 # ============================================================
-TYPING_MS_PER_CHAR_MIN = 0.018
-TYPING_MS_PER_CHAR_MAX = 0.050
-TYPING_MIN_DELAY = 0.35
-TYPING_MAX_DELAY = 5.0
-TYPING_JITTER_MIN = 0.85
-TYPING_JITTER_MAX = 1.25
-SEPARATED_TYPING_MULTIPLIER = 2.4
+TYPING_MS_PER_CHAR_MIN = 0.020
+TYPING_MS_PER_CHAR_MAX = 0.055
+TYPING_MIN_DELAY = 0.6
+TYPING_MAX_DELAY = 12.0
+TYPING_JITTER_MIN = 0.82
+TYPING_JITTER_MAX = 1.28
+SEPARATED_TYPING_MULTIPLIER = 1.8
 
 
 def calc_typing_delay(text: str, segment_index: int = 0) -> float:
@@ -1121,6 +1124,13 @@ WHY_PATTERN = re.compile(r'!\s*why\s*:\s*([^\n]+)', re.IGNORECASE)
 
 SEARCH_MARKER_PATTERN = re.compile(r'!\s*search(?![A-Za-z])', re.IGNORECASE)
 CHART_MARKER_PATTERN = re.compile(r'!\s*chart(?![A-Za-z])', re.IGNORECASE)
+TELL_PATTERN = re.compile(
+    r'!tell\s+((?:tg|ds):[^\n:]{1,100}|[^\n:]{1,100}?)\s*(?:::|:)\s*([^\n]{1,2000})',
+    re.IGNORECASE,
+)
+NOTIFY_OWNER_PATTERN = re.compile(r'!notify(?:_owner|_фолз)?\s*:?\s*([^\n]{1,1000})', re.IGNORECASE)
+REFUSE_PATTERN = re.compile(r'!refuse\s*:?\s*([^\n]{0,300})', re.IGNORECASE)
+REPLY_TARGET_PATTERN = re.compile(r'^\s*!reply\s*:?\s*(\d{1,20})\s*', re.IGNORECASE)
 
 RECALL_MEDIA_ID_PATTERN = re.compile(
     r'!\s*recall[\s_]*media\s*:?\s*(\d+)',
@@ -1151,6 +1161,15 @@ def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
     if rm:
         extras["recall_media_id"] = rm.group(1)
         text = RECALL_MEDIA_ID_PATTERN.sub(' ', text)
+    for match in TELL_PATTERN.finditer(text):
+        markers.append(f"tell:{match.group(1).strip()}\x1f{match.group(2).strip()}")
+    text = TELL_PATTERN.sub(' ', text)
+    for match in NOTIFY_OWNER_PATTERN.finditer(text):
+        markers.append(f"notify_owner:{match.group(1).strip()}")
+    text = NOTIFY_OWNER_PATTERN.sub(' ', text)
+    for match in REFUSE_PATTERN.finditer(text):
+        markers.append(f"refuse:{match.group(1).strip()}")
+    text = REFUSE_PATTERN.sub(' ', text)
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
@@ -1223,6 +1242,27 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
         segments = [raw_clean]
     clean_segments = [s.strip() for s in segments if s and s.strip()]
     return clean_segments, markers
+
+
+def take_reply_target(text: str) -> tuple[str, int | None]:
+    """Remove a leading !reply:ID marker and return the target message id."""
+    match = REPLY_TARGET_PATTERN.match(text or "")
+    if not match:
+        return text, None
+    return text[match.end():].lstrip(), int(match.group(1))
+
+
+def recent_user_message_ids(chat_key: str, limit: int = 10) -> set[int]:
+    found: list[int] = []
+    for entry in reversed(get_chat_memory(chat_key)):
+        if entry.get("type") != "user":
+            continue
+        message_id = entry.get("message_id")
+        if isinstance(message_id, int):
+            found.append(message_id)
+            if len(found) >= limit:
+                break
+    return set(found)
 
 
 # ============================================================

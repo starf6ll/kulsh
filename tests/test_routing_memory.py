@@ -69,6 +69,67 @@ class SecretTests(unittest.TestCase):
             self.assertIn("EXAMPLE_API_KEY='abc123'", content)
 
 
+class AgentTests(unittest.IsolatedAsyncioTestCase):
+    def test_agent_markers_are_extracted(self):
+        cleaned, markers, _ = util.extract_utility_markers(
+            "ок !tell петя :: привет, это от пети\n!notify_owner странное сообщение\n!refuse спам"
+        )
+        self.assertIn("tell:петя\x1fпривет, это от пети", markers)
+        self.assertIn("notify_owner:странное сообщение", markers)
+        self.assertIn("refuse:спам", markers)
+        self.assertEqual(cleaned, "ок")
+
+    def test_reply_target(self):
+        self.assertEqual(util.take_reply_target("!reply:123 привет"), ("привет", 123))
+        self.assertEqual(util.take_reply_target("привет"), ("привет", None))
+
+    def test_reply_markers_survive_response_processing(self):
+        segments, _ = util.process_ai_response(
+            "!reply:123 привет!separate!reply:456 пока", separate_enabled=True
+        )
+        self.assertEqual([util.take_reply_target(seg) for seg in segments],
+                         [("привет", 123), ("пока", 456)])
+
+    async def test_cross_chat_requires_group_permission(self):
+        from src import agent
+        old_groups, old_contacts, old_send = agent._groups, agent._contacts, agent.send_dm
+        try:
+            agent._groups = {}
+            agent._contacts = {"tg:1": {"platform": "tg", "id": 1, "display": "Петя",
+                                        "username": "petya", "private": True}}
+            agent.send_dm = AsyncMock(return_value=True)
+            result = await agent.tell("tg", 9, False, 2, "петя", "привет")
+            self.assertIn("выключены", result)
+            agent._groups = {"tg_9": {"cross_chat_enabled": True}}
+            result = await agent.tell("tg", 9, False, 2, "петя", "привет")
+            self.assertIn("отправил", result)
+        finally:
+            agent._groups, agent._contacts, agent.send_dm = old_groups, old_contacts, old_send
+
+    async def test_process_drawing_accepts_native_svg(self):
+        from src import draw
+        result = await draw.process_drawing(
+            '<svg width="80" height="80" viewBox="0 0 80 80">'
+            '<rect width="80" height="80" fill="#000000"/>'
+            '<circle cx="40" cy="40" r="20" fill="#ffffff"/></svg>'
+        )
+        self.assertIsNotNone(result.png)
+        self.assertGreater(len(result.png.getvalue()), 100)
+
+    async def test_svg_is_rendered(self):
+        from src import draw
+        spec = draw.svg_to_spec(
+            '<svg width="200" height="120" viewBox="0 0 200 120" '
+            'xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#102030"/>'
+            '<circle cx="60" cy="60" r="30" fill="#ff0000"/>'
+            '<text x="100" y="90" font-size="20" fill="#ffffff">kulsh</text></svg>'
+        )
+        self.assertIsNotNone(spec)
+        self.assertGreaterEqual(len(spec["elements"]), 2)
+        png = draw.render_spec(spec)
+        self.assertGreater(len(png.getvalue()), 100)
+
+
 class ImageBillingTests(unittest.IsolatedAsyncioTestCase):
     async def test_paid_image_charged_once(self):
         from src import image_gen, billing

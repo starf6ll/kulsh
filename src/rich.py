@@ -61,16 +61,26 @@ async def reply_tg_html(message: types.Message, text: str) -> None:
 async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = None) -> None:
     if delay is None:
         delay = calc_typing_delay(text)
+    # Telegram keeps the indicator alive for ~5 seconds. Stop refreshing it
+    # shortly before the send so it cannot continue after the answer appears.
+    if delay <= 1.2:
+        try:
+            await tg_bot.send_chat_action(chat_id, 'typing')
+        except Exception:
+            pass
+        await asyncio.sleep(delay)
+        return
     elapsed = 0.0
-    chunk = 4.0
-    while elapsed < delay:
+    while delay - elapsed > 1.2:
         try:
             await tg_bot.send_chat_action(chat_id, 'typing')
         except Exception as e:
             logger.debug(f"typing action: {e}")
-        step = min(chunk, delay - elapsed)
-        await asyncio.sleep(step)
-        elapsed += step
+        step = min(3.5, delay - elapsed - 1.2)
+        await asyncio.sleep(max(0.2, step))
+        elapsed += max(0.2, step)
+    if delay > elapsed:
+        await asyncio.sleep(delay - elapsed)
 
 
 # ============================================================

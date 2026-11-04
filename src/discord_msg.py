@@ -42,6 +42,7 @@ from src.billing import (
     ticket_by_admin_message,
 )
 from src import admin_panel
+from src import agent
 from src.util import (
     JsonDict,
     perform_safe_git_update,
@@ -129,6 +130,15 @@ async def on_message(message: discord.Message) -> None:
         return
     if admin_panel.is_blocked("ds", user_id) and not admin_panel.is_admin_ds(user_id):
         return
+    if agent.is_blocked("ds", user_id) and not admin_panel.is_admin_ds(user_id):
+        return
+    if not getattr(message.author, "bot", False):
+        agent.remember_contact(
+            "ds", user_id,
+            str(getattr(message.author, "display_name", message.author.name)),
+            getattr(message.author, "name", "") or "",
+            message.guild is None,
+        )
     admin_panel.touch_user(
         "ds", user_id,
         getattr(message.author, "display_name", "") or getattr(message.author, "name", ""),

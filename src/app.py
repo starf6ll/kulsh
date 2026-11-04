@@ -15,6 +15,7 @@ from telebot.async_telebot import AsyncTeleBot
 
 from src import discord_cmds, discord_msg, loops, media, rich, telegram, billing
 from src import admin_panel
+from src import agent
 from src.util import (
     AI_KEYS,
     ETAGEONE_API_KEY,
@@ -48,7 +49,8 @@ ds_tree = app_commands.CommandTree(ds_bot)
 
 
 async def _ds_interaction_check(interaction: discord.Interaction) -> bool:
-    if admin_panel.is_blocked("ds", interaction.user.id) and not admin_panel.is_admin_ds(interaction.user.id):
+    if (admin_panel.is_blocked("ds", interaction.user.id) or agent.is_blocked("ds", interaction.user.id)) \
+            and not admin_panel.is_admin_ds(interaction.user.id):
         try:
             await interaction.response.send_message("Доступ ограничен.", ephemeral=True)
         except Exception:
@@ -92,15 +94,23 @@ def register_telegram() -> None:
             user = getattr(message, "from_user", None)
             if user and admin_panel.is_blocked("tg", user.id) and not admin_panel.is_admin_tg(user.id):
                 return None
+            if user and agent.is_blocked("tg", user.id) and not admin_panel.is_admin_tg(user.id):
+                return None
             if user and not getattr(user, "is_bot", False):
                 admin_panel.touch_user("tg", user.id, getattr(user, "full_name", "") or "")
+                agent.remember_contact(
+                    "tg", user.id, getattr(user, "full_name", "") or "",
+                    getattr(user, "username", "") or "",
+                    getattr(message.chat, "type", "") == "private",
+                )
             return await fn(message, *args, **kwargs)
         return wrapped
 
     def _guard_call(fn: Callable[..., Any]) -> Callable[..., Any]:
         async def wrapped(call: types.CallbackQuery, *args: Any, **kwargs: Any) -> Any:
             user = call.from_user
-            if admin_panel.is_blocked("tg", user.id) and not admin_panel.is_admin_tg(user.id):
+            if (admin_panel.is_blocked("tg", user.id) or agent.is_blocked("tg", user.id)) \
+                    and not admin_panel.is_admin_tg(user.id):
                 try:
                     await tg_bot.answer_callback_query(call.id)
                 except Exception:

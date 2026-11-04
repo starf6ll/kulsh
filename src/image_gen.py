@@ -26,6 +26,16 @@ from src.util import (
 IMAGE_DAILY_LIMIT = 2
 IMAGE_API_BASE = "https://api.etage.one/v1"
 IMAGE_MODEL = "gpt-image-2.5-flare"
+IMAGE_MODEL_LABELS = {
+    "auto": "🎲 auto",
+    "flare": "gpt-image-2.5-flare",
+    "sunburst": "gpt-image-2.5-sunburst",
+    "paint": "Kulsh Paint 1.1",
+}
+
+
+def image_model_label(choice: str | None) -> str:
+    return IMAGE_MODEL_LABELS.get(choice or "auto", str(choice or "auto"))
 
 # Внутренние фразы для сообщения прогресса. Ровно 10, строчными буквами,
 # простая разговорная речь без переигрывания.

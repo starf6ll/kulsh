@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 from io import BytesIO
 from typing import Any, cast
 
@@ -855,6 +856,188 @@ def extract_draw_marker(text: str) -> tuple[JsonDict | None, str]:
     return spec, remaining
 
 
+def _svg_number(value: Any, default: float = 0.0) -> float:
+    match = re.search(r'-?\d+(?:\.\d+)?', str(value or ""))
+    return float(match.group(0)) if match else default
+
+
+def _svg_style(node: ET.Element) -> dict[str, str]:
+    style = {}
+    for part in str(node.get("style") or "").split(";"):
+        if ":" in part:
+            key, value = part.split(":", 1)
+            style[key.strip()] = value.strip()
+    for key in ("fill", "stroke", "stroke-width", "opacity", "fill-opacity",
+                "font-size", "font-family", "text-anchor"):
+        if node.get(key) is not None:
+            style[key] = str(node.get(key))
+    return style
+
+
+def _svg_matrix(value: str) -> tuple[float, float, float, float, float, float]:
+    result = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    for name, args in re.findall(r'(matrix|translate|scale)\s*\(([^)]*)\)', value or ""):
+        values = [float(x) for x in re.findall(r'-?\d+(?:\.\d+)?', args)]
+        if name == "matrix" and len(values) >= 6:
+            current = (values[0], values[1], values[2], values[3], values[4], values[5])
+        elif name == "translate" and values:
+            current = (1.0, 0.0, 0.0, 1.0, values[0], values[1] if len(values) > 1 else 0.0)
+        elif name == "scale" and values:
+            sy = values[1] if len(values) > 1 else values[0]
+            current = (values[0], 0.0, 0.0, sy, 0.0, 0.0)
+        else:
+            continue
+        a, b, c, d, e, f = result
+        a2, b2, c2, d2, e2, f2 = current
+        result = (
+            a * a2 + c * b2, b * a2 + d * b2,
+            a * c2 + c * d2, b * c2 + d * d2,
+            a * e2 + c * f2 + e, b * e2 + d * f2 + f,
+        )
+    return result
+
+
+def _svg_fill(style: dict[str, str], fallback: str = "#000000") -> str | None:
+    fill = style.get("fill", fallback)
+    if not fill or fill.lower() in ("none", "transparent", "url(#none)"):
+        return None
+    if fill.startswith("url("):
+        return fallback
+    return fill
+
+
+def _svg_outline(style: dict[str, str]) -> str | None:
+    stroke = style.get("stroke")
+    return None if not stroke or stroke.lower() == "none" else stroke
+
+
+def svg_to_spec(svg_text: str) -> JsonDict | None:
+    """Convert a practical SVG subset to the existing Pillow spec.
+
+    Supports rect, circle, ellipse, line, polygon, polyline, path and text,
+    including translate/scale/matrix transforms. Unsupported effects are
+    ignored rather than silently executing external resources.
+    """
+    match = re.search(r'<svg\b[\s\S]*?</svg>', svg_text or "", re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        root = ET.fromstring(match.group(0))
+    except ET.ParseError as exc:
+        logger.warning(f"svg parse: {exc}")
+        return None
+    view = [float(x) for x in re.findall(r'-?\d+(?:\.\d+)?', root.get("viewBox") or "")]
+    raw_width, raw_height = root.get("width"), root.get("height")
+    base_width = view[2] if len(view) >= 4 else 800
+    base_height = view[3] if len(view) >= 4 else 600
+    width = _svg_number(raw_width, base_width) * (base_width / 100.0 if "%" in str(raw_width) else 1)
+    height = _svg_number(raw_height, base_height) * (base_height / 100.0 if "%" in str(raw_height) else 1)
+    width = int(width)
+    height = int(height)
+    width = max(MIN_CANVAS, min(MAX_CANVAS, width))
+    height = max(MIN_CANVAS, min(MAX_CANVAS, height))
+    sx = width / view[2] if len(view) >= 4 and view[2] else 1.0
+    sy = height / view[3] if len(view) >= 4 and view[3] else 1.0
+    elements: list[JsonDict] = []
+    background = "#FFFFFF"
+
+    def point(x: float, y: float, matrix: tuple[float, float, float, float, float, float]) -> tuple[float, float]:
+        a, b, c, d, e, f = matrix
+        return (a * x + c * y + e, b * x + d * y + f)
+
+    def walk(node: ET.Element, matrix: tuple[float, float, float, float, float, float], depth: int = 0) -> None:
+        nonlocal background
+        if depth > 12:
+            return
+        tag = node.tag.split("}")[-1].lower()
+        local = _svg_matrix(str(node.get("transform") or ""))
+        a, b, c, d, e, f = matrix
+        a2, b2, c2, d2, e2, f2 = local
+        matrix = (
+            a * a2 + c * b2, b * a2 + d * b2,
+            a * c2 + c * d2, b * c2 + d * d2,
+            a * e2 + c * f2 + e, b * e2 + d * f2 + f,
+        )
+        style = _svg_style(node)
+        fill = _svg_fill(style)
+        outline = _svg_outline(style)
+        stroke_width = max(1, int(_svg_number(style.get("stroke-width"), 1)))
+        if tag in ("g", "svg", "defs", "symbol"):
+            if tag != "defs":
+                for child in list(node):
+                    walk(child, matrix, depth + 1)
+            return
+        try:
+            if tag == "rect":
+                raw_x, raw_y = node.get("x"), node.get("y")
+                raw_w, raw_h = node.get("width"), node.get("height")
+                x = _svg_number(raw_x) * (width / 100.0 if "%" in str(raw_x) else 1)
+                y = _svg_number(raw_y) * (height / 100.0 if "%" in str(raw_y) else 1)
+                w = _svg_number(raw_w) * (width / 100.0 if "%" in str(raw_w) else 1)
+                h = _svg_number(raw_h) * (height / 100.0 if "%" in str(raw_h) else 1)
+                if w <= 0 or h <= 0:
+                    return
+                if w >= width * 0.95 and h >= height * 0.95 and fill:
+                    background = fill
+                    return
+                p1 = point(x * sx, y * sy, matrix)
+                p2 = point((x + w) * sx, (y + h) * sy, matrix)
+                elements.append({"type": "rect", "x": min(p1[0], p2[0]), "y": min(p1[1], p2[1]),
+                                 "w": abs(p2[0] - p1[0]), "h": abs(p2[1] - p1[1]),
+                                 "fill": fill, "outline": outline, "width": stroke_width})
+            elif tag in ("circle", "ellipse"):
+                cx = _svg_number(node.get("cx")); cy = _svg_number(node.get("cy"))
+                rx = _svg_number(node.get("r")) if tag == "circle" else _svg_number(node.get("rx"))
+                ry = rx if tag == "circle" else _svg_number(node.get("ry"), rx)
+                p1 = point((cx - rx) * sx, (cy - ry) * sy, matrix)
+                p2 = point((cx + rx) * sx, (cy + ry) * sy, matrix)
+                elements.append({"type": "circle", "x": min(p1[0], p2[0]), "y": min(p1[1], p2[1]),
+                                 "x2": max(p1[0], p2[0]), "y2": max(p1[1], p2[1]),
+                                 "fill": fill, "outline": outline, "width": stroke_width})
+            elif tag == "line":
+                p1 = point(_svg_number(node.get("x1")) * sx, _svg_number(node.get("y1")) * sy, matrix)
+                p2 = point(_svg_number(node.get("x2")) * sx, _svg_number(node.get("y2")) * sy, matrix)
+                elements.append({"type": "line", "points": [list(p1), list(p2)],
+                                 "fill": outline or fill or "#000000", "width": stroke_width})
+            elif tag in ("polygon", "polyline"):
+                raw = [float(x) for x in re.findall(r'-?\d+(?:\.\d+)?', node.get("points") or "")]
+                points = [list(point(raw[i] * sx, raw[i + 1] * sy, matrix))
+                          for i in range(0, len(raw) - 1, 2)][:MAX_PATH_POINTS]
+                elements.append({"type": "polygon" if tag == "polygon" else "polyline",
+                                 "points": points, "fill": fill, "outline": outline, "width": stroke_width})
+            elif tag == "path":
+                d = str(node.get("d") or "")
+                elements.append({"type": "svg", "d": d, "fill": fill, "outline": outline,
+                                 "width": stroke_width, "closed": "z" in d.lower()})
+            elif tag == "text":
+                text = "".join(node.itertext()).strip()
+                if not text:
+                    return
+                x = _svg_number(node.get("x")); y = _svg_number(node.get("y"))
+                px, py = point(x * sx, y * sy, matrix)
+                anchor = {"middle": "ma", "end": "ra"}.get(style.get("text-anchor", "start"), "la")
+                elements.append({"type": "text", "text": text, "x": px, "y": py,
+                                 "size": max(8, int(_svg_number(style.get("font-size"), 32))),
+                                 "fill": fill or "#000000", "anchor": anchor})
+        except Exception as exc:
+            logger.warning(f"svg element {tag}: {exc}")
+
+    walk(root, (1.0, 0.0, 0.0, 1.0, 0.0, 0.0))
+    if not elements:
+        return None
+    return {"width": width, "height": height, "background": background, "elements": elements[:MAX_ELEMENTS]}
+
+
+def extract_svg_parts(text: str) -> tuple[JsonDict | None, str, str]:
+    match = re.search(r'<svg\b[\s\S]*?</svg>', text or "", re.IGNORECASE)
+    if not match:
+        return None, text or "", ""
+    spec = svg_to_spec(match.group(0))
+    if spec is None:
+        return None, text, ""
+    return spec, text[:match.start()].strip(), text[match.end():].strip()
+
+
 class DrawResult:
     __slots__ = ("png", "before", "after", "status")
 
@@ -878,6 +1061,8 @@ async def process_drawing(reply_text: str) -> DrawResult:
         status_parts.append(("✓ " if res.ok else "✗ ") + (res.output or cmd)[:200])
 
     spec, before, after = extract_draw_parts(text_wo_term)
+    if spec is None and "<svg" in text_wo_term.lower():
+        spec, before, after = extract_svg_parts(text_wo_term)
     png: BytesIO | None = None
     if spec is not None:
         try:

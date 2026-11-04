@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any
 
 from src.billing import SUPPORT_ADMIN_DS, SUPPORT_ADMIN_TG, add_balance
-from src import promo
+from src import promo, agent
 from src.util import (
     AUTHORIZED_UPDATERS,
     MSK,
@@ -501,6 +501,8 @@ async def on_tg_callback(bot: Any, call: Any) -> None:
         pass
     if action == "keys":
         if user_id != PREMIUM_ADMIN_ID or getattr(msg.chat, "type", "") != "private":
+            await _edit_tg(bot, chat_id, msg.message_id,
+                           "Ключи можно обновить только в личном чате с ботом.", _kb(btn))
             return
         _wait[user_id] = {"step": "keys", "ask_id": msg.message_id}
         await _edit_tg(bot, chat_id, msg.message_id,
@@ -514,6 +516,13 @@ async def on_tg_callback(bot: Any, call: Any) -> None:
     if action == "close":
         _wait.pop(user_id, None)
         await tg.dismiss_ui_flow(chat_id, user_id, msg.message_id)
+        return
+    if action.startswith("unblockbot:"):
+        parts = action.split(":")
+        if len(parts) == 3 and parts[2].lstrip("-").isdigit():
+            agent.unblock_user(parts[1], int(parts[2]))
+            await _edit_tg(bot, chat_id, msg.message_id,
+                           f"Пользователь {parts[1]}:{parts[2]} разблокирован.", None)
         return
     if action in ("block", "unblock", "topup"):
         prompts = {

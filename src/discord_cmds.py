@@ -30,7 +30,7 @@ from src.billing import (
     topup_code,
 )
 from src.charts import extract_chart_marker, render_infographic
-from src import cloud, promo
+from src import cloud, promo, agent
 from src.draw import process_drawing
 from src.image_gen import (
     consume_image,
@@ -38,6 +38,7 @@ from src.image_gen import (
     extract_image_parts,
     generate_image,
     image_remaining,
+    image_model_label,
     random_progress_phrase,
     recent_generated_images,
     remember_generated_image,
@@ -82,8 +83,10 @@ from src.util import (
     is_paid_model,
     premium_functions_enabled,
     process_ai_response,
+    recent_user_message_ids,
     read_log_tail,
     save_user_configs,
+    take_reply_target,
     scrub_stray_markers,
     set_ds_scope,
     split_emojis,
@@ -106,16 +109,24 @@ def bind(bot: Any) -> None:
 async def typing_with_delay_ds(channel: discord.abc.Messageable, text: str, delay: float | None = None) -> None:
     if delay is None:
         delay = calc_typing_delay(text)
-    elapsed = 0.0
-    chunk = 7.0
-    while elapsed < delay:
-        step = min(chunk, delay - elapsed)
+    if delay <= 1.0:
         try:
             async with channel.typing():
-                await asyncio.sleep(step)
+                await asyncio.sleep(delay)
         except Exception:
-            await asyncio.sleep(step)
-        elapsed += step
+            await asyncio.sleep(delay)
+        return
+    elapsed = 0.0
+    while delay - elapsed > 1.0:
+        step = min(8.5, delay - elapsed - 1.0)
+        try:
+            async with channel.typing():
+                await asyncio.sleep(max(0.2, step))
+        except Exception:
+            await asyncio.sleep(max(0.2, step))
+        elapsed += max(0.2, step)
+    if delay > elapsed:
+        await asyncio.sleep(delay - elapsed)
 
 
 SEARCH_ANIM_EMOJIS = ("🗿", "🍷")
@@ -519,9 +530,11 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_limit_out")
         elif "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
             try:
-                from src.ai import ask_paint
-                paint_raw = await ask_paint(orig_user_text or "нарисуй картинку", "ds", chat_id, user_id)
-                res = await process_drawing(paint_raw)
+                res = await process_drawing(answer_raw or "")
+                if res.png is None:
+                    from src.ai import ask_paint
+                    paint_raw = await ask_paint(orig_user_text or "нарисуй картинку", "ds", chat_id, user_id)
+                    res = await process_drawing(paint_raw)
                 draw_png, draw_before, draw_after = res.png, res.before, res.after
                 if res.status:
                     logger.info(f"🎨 draw terminal: {res.status}")
@@ -532,6 +545,43 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         draw_before if draw_png is not None else answer_raw,
         separate_enabled=separate_enabled,
     )
+
+    agent_actions = [m for m in markers if m.startswith(("tell:", "notify_owner:", "refuse:"))]
+    markers = [m for m in markers if m not in agent_actions]
+    agent_reports: list[str] = []
+    display_name = str(getattr(message.author, "display_name", "пользователь"))
+    is_private_chat = message.guild is None
+    for action in agent_actions:
+        if action.startswith("refuse:"):
+            reason = action.split(":", 1)[1].strip() or "жёсткое оскорбление"
+            agent.block_user("ds", user_id)
+            await agent.notify_owner(
+                f"⛔ {display_name} (ds:{user_id}) заблокирован ботом.\nПричина: {reason}\n"
+                f"Канал: {chat_id}. Разблокировать можно кнопкой ниже.",
+                unblock=("ds", user_id), source=f"refuse:ds:{user_id}",
+            )
+            refusal = (f"я с тобой общаться не буду. причина: {reason[:160]}"
+                       if lang == "ru" else f"i won't talk to you anymore. reason: {reason[:160]}")
+            if is_private_chat:
+                await message.channel.send(refusal)
+            elif not await agent.send_dm("ds", user_id, refusal):
+                await message.channel.send(refusal)
+            add_bot_memory(f"ds_{chat_id}", refusal)
+            return
+        if action.startswith("tell:"):
+            try:
+                query, outgoing = action[5:].split("\x1f", 1)
+                report = await agent.tell("ds", chat_id, is_private_chat,
+                                          user_id, query, outgoing)
+            except ValueError:
+                report = "не понял, кому и что отправить"
+            agent_reports.append(report)
+        elif action.startswith("notify_owner:"):
+            await agent.notify_owner(
+                f"⚠️ {display_name} (ds:{user_id}, канал {chat_id}): "
+                f"{action.split(':', 1)[1].strip()}",
+                source=f"notice:ds:{user_id}",
+            )
 
     extra_segments: list[str] = []
     if "avatar" in markers:
@@ -592,7 +642,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         except Exception as e:
             logger.warning(f"DS user_info ai: {e}")
 
-    all_segments = clean_segments + extra_segments
+    all_segments = clean_segments + extra_segments + agent_reports
     if draw_png is None and not all_segments:
         # Страховка: если в ответе был осмысленный текст, но он схлопнулся в ноль —
         # отправляем его как есть, чтобы ответ не пропал молча.
@@ -609,8 +659,16 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         return
 
     sent_flag = [False]
+    allowed_reply_ids = recent_user_message_ids(f"ds_{chat_id}", 10)
+    reply_targets_used = 0
 
     async def _send_seg(seg: str, idx: int) -> None:
+        nonlocal reply_targets_used
+        seg, reply_target = take_reply_target(seg)
+        if reply_target not in allowed_reply_ids or reply_targets_used >= 2:
+            reply_target = None
+        if reply_target is not None:
+            reply_targets_used += 1
         seg = scrub_stray_markers(seg)
         if cfg.get("communication_mode", "kent") == "kent":
             seg = strip_chat_emojis(seg)
@@ -622,7 +680,13 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         except Exception:
             pass
         try:
-            if idx == 0:
+            if reply_target is not None:
+                try:
+                    target_message = await message.channel.fetch_message(reply_target)
+                    await target_message.reply(seg)
+                except Exception:
+                    await message.channel.send(seg)
+            elif idx == 0:
                 try:
                     await message.reply(seg)
                 except Exception as e_reply:
@@ -826,12 +890,21 @@ class DsConfigView(discord.ui.View):
             discord.SelectOption(label=f"{tr(lang, 'cfg_reactions')}: {b('reactions_enabled')}", value="reactions_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_websearch')}: {b('web_search_enabled')}", value="web_search_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_drawing')}: {b('drawing_enabled')}", value="drawing_enabled"),
-            discord.SelectOption(label=f"🎨 Image model: {cfg.get('image_model', 'auto')}", value="image_model"),
+            discord.SelectOption(label=f"🎨 Image model: {image_model_label(cfg.get('image_model', 'auto'))}", value="image_model"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_stickers')}: {b('stickers_enabled')}", value="stickers_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_autoreply')}: {b('random_reply_enabled', False)}", value="random_reply_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_random')}: {b('random_messages_enabled')}", value="random_messages_enabled"),
             discord.SelectOption(label=tr(lang, "cfg_edit_prompt"), value="prompt"),
         ]
+        if self.is_admin and not self.is_dm:
+            options.append(discord.SelectOption(
+                label=f"🌐 Межчатовые: {'✅' if agent.group_setting('ds', self.chat_id, 'cross_chat_enabled', False) else '❌'}",
+                value="group_cross",
+            ))
+            options.append(discord.SelectOption(
+                label=f"🤖 Самостоятельные: {'✅' if agent.group_setting('ds', self.chat_id, 'autonomous_enabled', True) else '❌'}",
+                value="group_autonomous",
+            ))
         main_sel = discord.ui.Select(placeholder=tr(lang, "ds_menu_placeholder"),
                                      options=options, row=0, disabled=disabled)
         main_sel.callback = self._on_main
@@ -917,6 +990,16 @@ class DsConfigView(discord.ui.View):
             return
         if value == "prompt":
             await self._on_prompt(interaction)
+            return
+        if value in ("group_cross", "group_autonomous"):
+            if not self.is_admin or self.is_dm:
+                await interaction.response.send_message("только админ сервера", ephemeral=True)
+                return
+            setting = "cross_chat_enabled" if value == "group_cross" else "autonomous_enabled"
+            default = False if value == "group_cross" else True
+            new_value = not agent.group_setting("ds", self.chat_id, setting, default)
+            agent.set_group_setting("ds", self.chat_id, setting, new_value)
+            await self._refresh_main(interaction)
             return
         if value == "image_model":
             cfg = self._write()

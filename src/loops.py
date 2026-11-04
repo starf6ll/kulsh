@@ -14,6 +14,7 @@ import socketio
 
 from src.ai import ask_ai_async
 from src.rich import send_tg_html
+from src import agent
 from src.util import (
     STICKER_POOL,
     DONATIONALERTS_TOKEN,
@@ -27,6 +28,7 @@ from src.util import (
     add_donation,
     edge_tts,
     get_chat_memory,
+    get_user_config,
     logger,
     memory_to_messages,
     process_ai_response,
@@ -144,6 +146,10 @@ async def random_post_loop() -> None:
     while True:
         await asyncio.sleep(random.randint(3600, 14400))
         chat_key = f"tg_{TG_TARGET_CHAT}"
+        if not get_user_config("tg", TG_TARGET_CHAT, 0).get("random_messages_enabled", True):
+            continue
+        if not agent.group_setting("tg", TG_TARGET_CHAT, "autonomous_enabled", True):
+            continue
         memory = get_chat_memory(chat_key)
         try:
             if memory and memory[-1].get("type") == "user" and time.time() - float(memory[-1].get("ts") or 0) < 600:
@@ -175,6 +181,21 @@ async def random_post_loop() -> None:
                         await tg_bot.send_sticker(TG_TARGET_CHAT, random.choice(STICKER_POOL))
                     except Exception as e:
                         logger.warning(f"random_post sticker: {e}")
+                elif m.startswith("tell:"):
+                    try:
+                        query, outgoing = m[5:].split("\x1f", 1)
+                        report = await agent.tell("tg", TG_TARGET_CHAT, True, 0, query, outgoing)
+                        await send_tg_html(TG_TARGET_CHAT, report)
+                    except Exception as e:
+                        logger.warning(f"random_post tell: {e}")
+                elif m.startswith("notify_owner:"):
+                    try:
+                        await agent.notify_owner(
+                            f"⚠️ Автономное сообщение: {m.split(':', 1)[1].strip()}",
+                            source=f"notice:tg:{TG_TARGET_CHAT}",
+                        )
+                    except Exception as e:
+                        logger.warning(f"random_post notify: {e}")
         except Exception as e:
             logger.info(f"random_post_loop: {e}")
 

@@ -19,6 +19,7 @@ from telebot.types import ForceReply, InlineKeyboardMarkup, InputFile
 
 from src import balance_ui
 from src import admin_panel
+from src import agent
 from src.loops import send_donation_alert
 from src.ai import (
     extract_search_marker,
@@ -93,8 +94,10 @@ from src.util import (
     human_uptime,
     markdown_like_to_telegram_html,
     process_ai_response,
+    recent_user_message_ids,
     save_user_configs,
     scrub_stray_markers,
+    take_reply_target,
     split_emojis,
     strip_chat_emojis,
     strip_chat_punctuation,
@@ -349,6 +352,21 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
     lang = cfg.get("language", "ru")
     toast = tr(lang, "cfg_updated")
     is_private = (msg.chat.type == 'private')
+    group_admin = False
+    if not is_private:
+        try:
+            member = await tg_bot.get_chat_member(chat_id, user_id)
+            group_admin = getattr(member, "status", "") in ("administrator", "creator")
+        except Exception:
+            group_admin = False
+
+    def _main_kb() -> Any:
+        return build_main_config_keyboard(
+            "tg", chat_id, user_id,
+            show_group_settings=group_admin,
+            group_cross=agent.group_setting("tg", chat_id, "cross_chat_enabled", False),
+            group_autonomous=agent.group_setting("tg", chat_id, "autonomous_enabled", True),
+        )
 
     if action == "mode":
         await edit_or_send(call, mode_picker_text("tg", chat_id, user_id, is_private=is_private),
@@ -371,7 +389,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
                 toast = tr(lang, "mode_set", tr(lang, "mode_kent"))
             save_user_configs()
         await edit_or_send(call, config_text("tg", chat_id, user_id),
-                            build_main_config_keyboard("tg", chat_id, user_id))
+                            _main_kb())
         await tg_bot.answer_callback_query(cb_id(call), toast)
         return
 
@@ -412,7 +430,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
 
     if action in ("model_back", "sub_back"):
         await edit_or_send(call, config_text("tg", chat_id, user_id),
-                            build_main_config_keyboard("tg", chat_id, user_id))
+                            _main_kb())
         await tg_bot.answer_callback_query(cb_id(call))
         return
 
@@ -429,7 +447,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
             toast = tr(lang, "cfg_lang_set_ru") if val == "ru" else tr(lang, "cfg_lang_set_en")
             save_user_configs()
         await edit_or_send(call, config_text("tg", chat_id, user_id),
-                            build_main_config_keyboard("tg", chat_id, user_id))
+                            _main_kb())
         await tg_bot.answer_callback_query(cb_id(call), toast)
         return
 
@@ -445,7 +463,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
             toast = tr(lang, "cfg_theme_dark") if val == "dark" else tr(lang, "cfg_theme_light")
             save_user_configs()
         await edit_or_send(call, config_text("tg", chat_id, user_id),
-                            build_main_config_keyboard("tg", chat_id, user_id))
+                            _main_kb())
         await tg_bot.answer_callback_query(cb_id(call), toast)
         return
 
@@ -508,6 +526,19 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
     elif action == "drawing":
         cfg["drawing_enabled"] = not cfg.get("drawing_enabled", True)
         save_user_configs()
+    elif action in ("group_cross", "group_autonomous"):
+        if not group_admin:
+            await tg_bot.answer_callback_query(cb_id(call), "только админ группы", show_alert=True)
+            return
+        setting = "cross_chat_enabled" if action == "group_cross" else "autonomous_enabled"
+        default = False if action == "group_cross" else True
+        new_value = not agent.group_setting("tg", chat_id, setting, default)
+        agent.set_group_setting("tg", chat_id, setting, new_value)
+        toast = ("межчатовые сообщения" if action == "group_cross" else "самостоятельные сообщения") + \
+                (" включены" if new_value else " выключены")
+        await edit_or_send(call, config_text("tg", chat_id, user_id), _main_kb())
+        await tg_bot.answer_callback_query(cb_id(call), toast)
+        return
     elif action == "image_model":
         choices = ("auto", "flare", "sunburst", "paint")
         current = cfg.get("image_model", "auto")
@@ -535,7 +566,7 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         return
 
     await edit_or_send(call, config_text("tg", chat_id, user_id),
-                        build_main_config_keyboard("tg", chat_id, user_id))
+                        _main_kb())
     await tg_bot.answer_callback_query(cb_id(call), toast)
 
 
@@ -601,7 +632,19 @@ async def handle_menu_callback(call: types.CallbackQuery) -> None:
         # Открыть настройки с этого меню. Кнопка "Настройки" в меню открывает
         # СВОИ настройки тому, кто её нажал. Все cfg-кнопки будут нести owner = user_id.
         cfg_text = config_text("tg", chat_id, user_id)
-        kb = build_main_config_keyboard("tg", chat_id, user_id)
+        is_group = msg.chat.type != "private"
+        group_admin = False
+        if is_group:
+            try:
+                member = await tg_bot.get_chat_member(chat_id, user_id)
+                group_admin = getattr(member, "status", "") in ("administrator", "creator")
+            except Exception:
+                pass
+        kb = build_main_config_keyboard(
+            "tg", chat_id, user_id, show_group_settings=group_admin,
+            group_cross=agent.group_setting("tg", chat_id, "cross_chat_enabled", False),
+            group_autonomous=agent.group_setting("tg", chat_id, "autonomous_enabled", True),
+        )
         ok = await _edit_config_message(chat_id, msg.message_id, cfg_text, kb)
         if ok:
             config_msg_owners[(chat_id, msg.message_id)] = user_id
@@ -895,7 +938,18 @@ async def tg_handle_config(message: types.Message) -> None:
     chat_key = get_chat_key("tg", chat_id)
     config_trigger_msgs[chat_key] = message.message_id
     cfg_text = config_text("tg", chat_id, user_id)
-    kb = build_main_config_keyboard("tg", chat_id, user_id)
+    group_admin = False
+    if message.chat.type != "private":
+        try:
+            member = await tg_bot.get_chat_member(chat_id, user_id)
+            group_admin = getattr(member, "status", "") in ("administrator", "creator")
+        except Exception:
+            pass
+    kb = build_main_config_keyboard(
+        "tg", chat_id, user_id, show_group_settings=group_admin,
+        group_cross=agent.group_setting("tg", chat_id, "cross_chat_enabled", False),
+        group_autonomous=agent.group_setting("tg", chat_id, "autonomous_enabled", True),
+    )
     mid = await send_formatted_returning_id(
         chat_id, cfg_text, reply_to=message.message_id, reply_markup=kb,
     )
@@ -1496,9 +1550,11 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
                     answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_limit_out")
         elif "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
             try:
-                from src.ai import ask_paint
-                paint_raw = await ask_paint(orig_user_text or "нарисуй картинку", "tg", chat_id, user_id)
-                res = await process_drawing(paint_raw)
+                res = await process_drawing(answer_raw or "")
+                if res.png is None:
+                    from src.ai import ask_paint
+                    paint_raw = await ask_paint(orig_user_text or "нарисуй картинку", "tg", chat_id, user_id)
+                    res = await process_drawing(paint_raw)
                 draw_png, draw_before, draw_after = res.png, res.before, res.after
                 if res.status:
                     logger.info(f"🎨 draw terminal: {res.status}")
@@ -1509,6 +1565,44 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
         draw_before if draw_png is not None else answer_raw,
         separate_enabled=separate_enabled,
     )
+
+    agent_actions = [m for m in markers if m.startswith(("tell:", "notify_owner:", "refuse:"))]
+    markers = [m for m in markers if m not in agent_actions]
+    agent_reports: list[str] = []
+    display_name = getattr(message.from_user, "full_name", "") or "пользователь"
+    for action in agent_actions:
+        if action.startswith("refuse:"):
+            reason = action.split(":", 1)[1].strip() or "жёсткое оскорбление"
+            agent.block_user("tg", user_id)
+            await agent.notify_owner(
+                f"⛔ {display_name} (tg:{user_id}) заблокирован ботом.\nПричина: {reason}\n"
+                f"Чат: {chat_id}. Разблокировать можно кнопкой ниже.",
+                unblock=("tg", user_id), source=f"refuse:tg:{user_id}",
+            )
+            refusal = (f"я с тобой общаться не буду. причина: {reason[:160]}"
+                       if lang == "ru" else f"i won't talk to you anymore. reason: {reason[:160]}")
+            if message.chat.type == "private" or not await agent.send_dm("tg", user_id, refusal):
+                try:
+                    await typing_with_delay_tg(chat_id, refusal)
+                    await send_tg_html(chat_id, refusal, reply_to=message.message_id)
+                except Exception:
+                    pass
+            add_bot_memory(f"tg_{chat_id}", refusal)
+            return
+        if action.startswith("tell:"):
+            try:
+                query, outgoing = action[5:].split("\x1f", 1)
+                report = await agent.tell("tg", chat_id, message.chat.type == "private",
+                                          user_id, query, outgoing)
+            except ValueError:
+                report = "не понял, кому и что отправить"
+            agent_reports.append(report)
+        elif action.startswith("notify_owner:"):
+            await agent.notify_owner(
+                f"⚠️ {display_name} (tg:{user_id}, чат {chat_id}): "
+                f"{action.split(':', 1)[1].strip()}",
+                source=f"notice:tg:{user_id}",
+            )
 
     extra_segments: list[str] = []
     if "avatar" in markers:
@@ -1522,7 +1616,7 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
     if "recall_media" in markers:
         markers.remove("recall_media")
 
-    all_segments = clean_segments + extra_segments
+    all_segments = clean_segments + extra_segments + agent_reports
 
     if draw_png is None and not all_segments:
         fallback = scrub_stray_markers(answer_raw or "").strip()
@@ -1537,8 +1631,17 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
         return
 
     is_private_chat = (message.chat.type == 'private')
+    allowed_reply_ids = recent_user_message_ids(f"tg_{chat_id}", 10)
+    reply_targets_used = 0
 
     async def _send_seg(seg: str, idx: int) -> None:
+        nonlocal reply_targets_used
+        seg, reply_target = take_reply_target(seg)
+        if reply_target not in allowed_reply_ids or reply_targets_used >= 2:
+            reply_target = None
+        if reply_target is not None:
+            reply_targets_used += 1
+        reply_to = reply_target if reply_target is not None else (message.message_id if idx == 0 else None)
         seg = scrub_stray_markers(seg)
         if cfg.get("communication_mode", "kent") == "kent":
             seg = strip_chat_emojis(seg)
@@ -1556,18 +1659,12 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
                 logger.debug(f"stream fail: {e}")
         sent_ok = False
         try:
-            sent_ok = await send_rich_message(
-                message.chat.id, seg,
-                reply_to=message.message_id if idx == 0 else None,
-            )
+            sent_ok = await send_rich_message(message.chat.id, seg, reply_to=reply_to)
         except Exception as e:
             logger.debug(f"rich fail: {e}")
         if not sent_ok:
             try:
-                if idx == 0:
-                    await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
-                else:
-                    await send_tg_html(message.chat.id, seg)
+                await send_tg_html(message.chat.id, seg, reply_to=reply_to)
             except Exception as e:
                 logger.error(f"send_tg_html fail: {e}")
         add_bot_memory(f"tg_{message.chat.id}", seg)
@@ -1680,6 +1777,8 @@ async def maybe_reply_to_old_message_tg(message: types.Message, chat_id: int, us
 async def should_random_reply(platform: str, chat_id: int, user_id: int) -> bool:
     cfg = get_user_config(platform, chat_id, user_id)
     if not cfg.get("random_reply_enabled", False):
+        return False
+    if not agent.group_setting(platform, chat_id, "autonomous_enabled", True):
         return False
     chat_key = f"{platform}_{chat_id}"
     now = time.time()
