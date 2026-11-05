@@ -158,15 +158,14 @@ async def _autonomous_candidates(platform: str) -> list[dict[str, Any]]:
         chat_id = int(entry.get("id") or 0)
         if not chat_id:
             continue
-        if not agent.autonomous_allowed(platform, chat_id):
-            continue
-        if not get_user_config(platform, chat_id, 0).get("random_messages_enabled", True):
+        if not get_user_config(platform, chat_id, int(entry.get("owner_id") or 0)).get(
+                "random_messages_enabled", True):
             continue
         found.append(entry)
     return found
 
 
-async def _autonomous_post(platform: str, chat_id: int) -> None:
+async def _autonomous_post(platform: str, chat_id: int, user_id: int = 0) -> None:
     """Одна самостоятельная реплика бота в конкретном чате."""
     chat_key = f"{platform}_{chat_id}"
     memory = get_chat_memory(chat_key)
@@ -178,11 +177,11 @@ async def _autonomous_post(platform: str, chat_id: int) -> None:
                         "сказать своё мнение — напиши одно короткое сообщение. Если нет — ответь ровно 'НЕТ'."),
                 context_type="observer",
                 messages=memory_to_messages(memory),
-                chat_id=chat_id, user_id=0, platform=platform,
+                chat_id=chat_id, user_id=user_id, platform=platform,
             )
         else:
             answer = await ask_ai_async(
-                context_type="random", chat_id=chat_id, user_id=0, platform=platform,
+                context_type="random", chat_id=chat_id, user_id=user_id, platform=platform,
             )
     except Exception as exc:
         logger.info(f"autonomous ask {chat_key}: {exc}")
@@ -239,7 +238,7 @@ async def random_post_loop() -> None:
                 if random.random() > chance:
                     continue
                 _last_autonomous[f"tg_{chat_id}"] = time.time()
-                await _autonomous_post("tg", chat_id)
+                await _autonomous_post("tg", chat_id, int(entry.get("owner_id") or 0))
         except Exception as exc:
             logger.info(f"random_post_loop: {exc}")
 
@@ -281,7 +280,7 @@ async def ds_autonomous_loop() -> None:
                 if random.random() > chance:
                     continue
                 _last_autonomous[f"ds_{chat_id}"] = time.time()
-                await _autonomous_post("ds", chat_id)
+                await _autonomous_post("ds", chat_id, int(entry.get("owner_id") or 0))
         except Exception as exc:
             logger.info(f"ds_autonomous_loop: {exc}")
 

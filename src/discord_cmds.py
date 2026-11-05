@@ -789,8 +789,8 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="💬 Разбивка", value=sep, inline=True)
         embed.add_field(name="😀 Реакции", value=reactions, inline=True)
         embed.add_field(name="🔎 Веб-поиск", value=websearch, inline=True)
-        embed.add_field(name="🎨 Рисование", value=drawing, inline=True)
-        embed.add_field(name="🎨 Стикеры/гифки", value=stickers, inline=True)
+        embed.add_field(name="✏️ Рисование", value=drawing, inline=True)
+        embed.add_field(name="🎭 Стикеры/гифки", value=stickers, inline=True)
         embed.add_field(name="🗣 Автоответ", value=autoreply, inline=True)
         embed.add_field(name="📢 Случайные", value=random_msgs, inline=True)
         embed.add_field(name="🎬 Серия", value=series, inline=True)
@@ -823,8 +823,8 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="💬 Split", value=sep, inline=True)
         embed.add_field(name="😀 Reactions", value=reactions, inline=True)
         embed.add_field(name="🔎 Web search", value=websearch, inline=True)
-        embed.add_field(name="🎨 Drawing", value=drawing, inline=True)
-        embed.add_field(name="🎨 Stickers/GIFs", value=stickers, inline=True)
+        embed.add_field(name="✏️ Drawing", value=drawing, inline=True)
+        embed.add_field(name="🎭 Stickers/GIFs", value=stickers, inline=True)
         embed.add_field(name="🗣 Auto-reply", value=autoreply, inline=True)
         embed.add_field(name="📢 Random", value=random_msgs, inline=True)
         embed.add_field(name="🎬 Series", value=series, inline=True)
@@ -896,7 +896,7 @@ class DsConfigView(discord.ui.View):
             discord.SelectOption(label=f"{tr(lang, 'cfg_reactions')}: {b('reactions_enabled')}", value="reactions_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_websearch')}: {b('web_search_enabled')}", value="web_search_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_drawing')}: {b('drawing_enabled')}", value="drawing_enabled"),
-            discord.SelectOption(label=f"🎨 {tr(lang, 'cfg_image_model')}: {image_model_label(cfg.get('image_model', 'auto'), lang)}", value="image_model"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_image_model')}: {image_model_label(cfg.get('image_model', 'auto'), lang)}", value="image_model"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_stickers')}: {b('stickers_enabled')}", value="stickers_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_autoreply')}: {b('random_reply_enabled', False)}", value="random_reply_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_random')}: {b('random_messages_enabled')}", value="random_messages_enabled"),
@@ -904,12 +904,8 @@ class DsConfigView(discord.ui.View):
         ]
         if self.is_admin and not self.is_dm:
             options.append(discord.SelectOption(
-                label=f"🌐 Приём сообщений из других чатов: {'✅' if agent.group_setting('ds', self.chat_id, 'cross_chat_enabled', False) else '❌'}",
+                label=f"🌐 Межчатовые сообщения: {'✅' if agent.group_setting('ds', self.chat_id, 'cross_chat_enabled', False) else '❌'}",
                 value="group_cross",
-            ))
-            options.append(discord.SelectOption(
-                label=f"🤖 Самостоятельные: {'✅' if agent.group_setting('ds', self.chat_id, 'autonomous_enabled', True) else '❌'}",
-                value="group_autonomous",
             ))
         main_sel = discord.ui.Select(placeholder=tr(lang, "ds_menu_placeholder"),
                                      options=options, row=0, disabled=disabled)
@@ -997,14 +993,12 @@ class DsConfigView(discord.ui.View):
         if value == "prompt":
             await self._on_prompt(interaction)
             return
-        if value in ("group_cross", "group_autonomous"):
+        if value == "group_cross":
             if not self.is_admin or self.is_dm:
                 await interaction.response.send_message("только админ сервера", ephemeral=True)
                 return
-            setting = "cross_chat_enabled" if value == "group_cross" else "autonomous_enabled"
-            default = False if value == "group_cross" else True
-            new_value = not agent.group_setting("ds", self.chat_id, setting, default)
-            agent.set_group_setting("ds", self.chat_id, setting, new_value)
+            new_value = not agent.group_setting("ds", self.chat_id, "cross_chat_enabled", False)
+            agent.set_group_setting("ds", self.chat_id, "cross_chat_enabled", new_value)
             await self._refresh_main(interaction)
             return
         if value == "image_model":

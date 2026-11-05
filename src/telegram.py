@@ -369,7 +369,6 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
             "tg", chat_id, user_id,
             show_group_settings=group_admin,
             group_cross=agent.group_setting("tg", chat_id, "cross_chat_enabled", False),
-            group_autonomous=agent.group_setting("tg", chat_id, "autonomous_enabled", True),
         )
 
     if action == "mode":
@@ -522,7 +521,11 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         cfg["random_reply_enabled"] = not cfg.get("random_reply_enabled", False)
         save_user_configs()
     elif action == "random":
-        cfg["random_messages_enabled"] = not cfg.get("random_messages_enabled", True)
+        if not is_private and not group_admin:
+            await tg_bot.answer_callback_query(cb_id(call), "только админ группы", show_alert=True)
+            return
+        random_cfg = cfg if is_private else get_user_config("tg", chat_id, 0)
+        random_cfg["random_messages_enabled"] = not random_cfg.get("random_messages_enabled", True)
         save_user_configs()
     elif action == "websearch":
         cfg["web_search_enabled"] = not cfg.get("web_search_enabled", True)
@@ -530,16 +533,13 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
     elif action == "drawing":
         cfg["drawing_enabled"] = not cfg.get("drawing_enabled", True)
         save_user_configs()
-    elif action in ("group_cross", "group_autonomous"):
+    elif action == "group_cross":
         if not group_admin:
             await tg_bot.answer_callback_query(cb_id(call), "только админ группы", show_alert=True)
             return
-        setting = "cross_chat_enabled" if action == "group_cross" else "autonomous_enabled"
-        default = False if action == "group_cross" else True
-        new_value = not agent.group_setting("tg", chat_id, setting, default)
-        agent.set_group_setting("tg", chat_id, setting, new_value)
-        toast = ("межчатовые сообщения" if action == "group_cross" else "самостоятельные сообщения") + \
-                (" включены" if new_value else " выключены")
+        new_value = not agent.group_setting("tg", chat_id, "cross_chat_enabled", False)
+        agent.set_group_setting("tg", chat_id, "cross_chat_enabled", new_value)
+        toast = "межчатовые сообщения" + (" включены" if new_value else " выключены")
         await edit_or_send(call, config_text("tg", chat_id, user_id), _main_kb())
         await tg_bot.answer_callback_query(cb_id(call), toast)
         return
@@ -656,7 +656,6 @@ async def handle_menu_callback(call: types.CallbackQuery) -> None:
         kb = build_main_config_keyboard(
             "tg", chat_id, user_id, show_group_settings=group_admin,
             group_cross=agent.group_setting("tg", chat_id, "cross_chat_enabled", False),
-            group_autonomous=agent.group_setting("tg", chat_id, "autonomous_enabled", True),
         )
         ok = await _edit_config_message(chat_id, msg.message_id, cfg_text, kb)
         if ok:
@@ -961,7 +960,6 @@ async def tg_handle_config(message: types.Message) -> None:
     kb = build_main_config_keyboard(
         "tg", chat_id, user_id, show_group_settings=group_admin,
         group_cross=agent.group_setting("tg", chat_id, "cross_chat_enabled", False),
-        group_autonomous=agent.group_setting("tg", chat_id, "autonomous_enabled", True),
     )
     mid = await send_formatted_returning_id(
         chat_id, cfg_text, reply_to=message.message_id, reply_markup=kb,
@@ -1794,8 +1792,6 @@ async def maybe_reply_to_old_message_tg(message: types.Message, chat_id: int, us
 async def should_random_reply(platform: str, chat_id: int, user_id: int) -> bool:
     cfg = get_user_config(platform, chat_id, user_id)
     if not cfg.get("random_reply_enabled", False):
-        return False
-    if not agent.autonomous_allowed(platform, chat_id):
         return False
     chat_key = f"{platform}_{chat_id}"
     now = time.time()

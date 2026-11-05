@@ -79,6 +79,25 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("refuse:спам", markers)
         self.assertEqual(cleaned, "ок")
 
+    def test_tell_keeps_platform_prefix_target(self):
+        cleaned, markers, _ = util.extract_utility_markers("!tell tg:-100123 :: привет")
+        self.assertEqual(markers, ["tell:tg:-100123\x1fпривет"])
+        self.assertEqual(cleaned, "")
+
+    def test_tell_empty_payload_does_not_become_colon(self):
+        cleaned, markers, _ = util.extract_utility_markers("!tell tg:-100 ::")
+        self.assertEqual(markers, ["tell:tg:-100\x1f"])
+        self.assertEqual(cleaned, "")
+
+    def test_tell_absorbs_image_block_from_next_line(self):
+        cleaned, markers, _ = util.extract_utility_markers(
+            '!tell Кенты :: вот\n!image\n```json\n{"width":100}\n```\nготово'
+        )
+        self.assertEqual(cleaned, "готово")
+        self.assertEqual(len(markers), 1)
+        self.assertTrue(markers[0].startswith("tell:Кенты\x1fвот !image"))
+        self.assertIn('"width":100', markers[0])
+
     def test_reply_target(self):
         self.assertEqual(util.take_reply_target("!reply:123 привет"), ("привет", 123))
         self.assertEqual(util.take_reply_target("привет"), ("привет", None))

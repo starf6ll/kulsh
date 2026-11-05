@@ -1146,6 +1146,128 @@ def split_by_separator(text: str) -> list[str]:
     return [p.strip() for p in parts if p and p.strip()]
 
 
+_TELL_START = re.compile(r'!tell\b', re.IGNORECASE)
+
+
+def _skip_spaces(text: str, pos: int) -> int:
+    while pos < len(text) and text[pos] in " \t\r\n":
+        pos += 1
+    return pos
+
+
+def _json_block_end(text: str, pos: int) -> int:
+    """Конец JSON-блока (```json ... ``` или { ... }) начиная с pos, иначе pos."""
+    i = _skip_spaces(text, pos)
+    if i >= len(text):
+        return pos
+    if text.startswith("```", i):
+        end = text.find("```", i + 3)
+        return end + 3 if end != -1 else pos
+    if text[i] == "{":
+        depth = 0
+        in_str = False
+        esc = False
+        for j in range(i, len(text)):
+            char = text[j]
+            if esc:
+                esc = False
+                continue
+            if char == "\\":
+                esc = True
+                continue
+            if char == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+        return pos
+    return pos
+
+
+def _tell_separator(text: str, start: int) -> tuple[int, int]:
+    """Позиция разделителя :: или : после цели, с учётом префикса tg:/ds:."""
+    start = _skip_spaces(text, start)
+    prefix_end = start
+    if text[start:start + 3].lower() in ("tg:", "ds:"):
+        prefix_end = start + 3
+    double = text.find("::", prefix_end)
+    single = text.find(":", prefix_end)
+    if single == -1:
+        return -1, 0
+    if double == single:
+        return double, 2
+    return single, 1
+
+
+def _extract_tells(text: str) -> tuple[str, list[str]]:
+    """Достаёт !tell, включая картинку/рисунок блоком на следующей строке.
+
+    Пустой текст после разделителя больше не превращается в сообщение ":".
+    """
+    markers: list[str] = []
+    removals: list[tuple[int, int]] = []
+    pos = 0
+    while True:
+        match = _TELL_START.search(text, pos)
+        if not match:
+            break
+        sep_pos, sep_len = _tell_separator(text, match.end())
+        if sep_pos == -1:
+            pos = match.end()
+            continue
+        target = text[match.end():sep_pos].strip().strip("\"'")
+        if not target:
+            pos = sep_pos + sep_len
+            continue
+        payload_start = sep_pos + sep_len
+        newline = text.find("\n", payload_start)
+        line_end = newline if newline != -1 else len(text)
+        payload = text[payload_start:line_end].strip()
+        if payload == ":":
+            payload = ""
+        end = line_end
+        next_pos = _skip_spaces(text, line_end)
+        image_marker = ""
+        for candidate in ("!image", "!draw"):
+            if text[next_pos:next_pos + len(candidate)].lower() == candidate:
+                image_marker = candidate
+                break
+        if image_marker:
+            block_end = _json_block_end(text, next_pos + len(image_marker))
+            if block_end > next_pos + len(image_marker):
+                block = text[next_pos:block_end].strip()
+                payload = f"{payload} {block}".strip()
+                end = block_end
+        elif payload == "" or payload.endswith(("!image", "!draw")):
+            block_end = _json_block_end(text, line_end)
+            if block_end > line_end:
+                block = text[line_end:block_end].strip()
+                if payload == "":
+                    kind = "!draw" if '"elements"' in block else "!image"
+                    payload = f"{kind} {block}"
+                else:
+                    payload = f"{payload} {block}"
+                end = block_end
+        markers.append(f"tell:{target}\x1f{payload}")
+        removals.append((match.start(), end))
+        pos = end
+    if removals:
+        pieces: list[str] = []
+        last = 0
+        for start, end in removals:
+            pieces.append(text[last:start])
+            last = end
+        pieces.append(text[last:])
+        text = "".join(pieces)
+    return text, markers
+
+
 def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
     text = text or ""
     markers: list[str] = []
@@ -1161,9 +1283,8 @@ def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
     if rm:
         extras["recall_media_id"] = rm.group(1)
         text = RECALL_MEDIA_ID_PATTERN.sub(' ', text)
-    for match in TELL_PATTERN.finditer(text):
-        markers.append(f"tell:{match.group(1).strip()}\x1f{match.group(2).strip()}")
-    text = TELL_PATTERN.sub(' ', text)
+    text, tell_markers = _extract_tells(text)
+    markers.extend(tell_markers)
     for match in NOTIFY_OWNER_PATTERN.finditer(text):
         markers.append(f"notify_owner:{match.group(1).strip()}")
     text = NOTIFY_OWNER_PATTERN.sub(' ', text)

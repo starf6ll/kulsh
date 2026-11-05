@@ -113,7 +113,8 @@ def register_telegram() -> None:
                              or " ".join(filter(None, [getattr(chat, "first_name", "") or "",
                                                        getattr(chat, "last_name", "") or ""]))
                              or (getattr(chat, "username", "") or ""))
-                    chats.register("tg", chat.id, kind, title)
+                    chats.register("tg", chat.id, kind, title,
+                                   owner_id=chat.id if kind == "private" else None)
                 except Exception:
                     pass
             return await fn(message, *args, **kwargs)

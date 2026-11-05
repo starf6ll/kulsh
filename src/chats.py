@@ -44,7 +44,7 @@ def _key(platform: str, chat_id: int) -> str:
 
 
 def register(platform: str, chat_id: int, kind: str, title: str = "",
-             guild_id: int | None = None) -> None:
+             guild_id: int | None = None, owner_id: int | None = None) -> None:
     """Запомнить чат. kind: private / group / channel."""
     if not chat_id:
         return
@@ -59,6 +59,8 @@ def register(platform: str, chat_id: int, kind: str, title: str = "",
     })
     if guild_id:
         entry["guild_id"] = int(guild_id)
+    if owner_id:
+        entry["owner_id"] = int(owner_id)
     _save()
 
 
