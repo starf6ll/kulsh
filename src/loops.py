@@ -168,32 +168,22 @@ async def _autonomous_candidates(platform: str) -> list[dict[str, Any]]:
 async def _autonomous_post(platform: str, chat_id: int, user_id: int = 0) -> None:
     """Одна самостоятельная реплика бота в конкретном чате.
 
-    Как в старой версии: бот не сочиняет реплику в вакууме, а смотрит на
-    живую историю чата. Если последнее сообщение — его собственное или
-    разговор давно заглох, он молчит, чтобы не спамить шаблонами.
+    Раньше бот не проверял, кто написал последним и когда: он просто
+    выходил в чат и нёс что хотел, мог писать несколько сообщений подряд
+    и разговаривать сам с собой. Эту логику и возвращаем.
     """
     chat_key = f"{platform}_{chat_id}"
     memory = get_chat_memory(chat_key)
-    if not memory:
-        return
-    last_entry = memory[-1]
-    if last_entry.get("type") != "user":
-        return
-    if time.time() - float(last_entry.get("ts") or 0) > 1800:
-        return
+    messages = memory_to_messages(memory) if memory else None
     try:
         answer = await ask_ai_async(
-            prompt=("Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно "
-                    "короткое сообщение. Если нет — ответь ровно 'НЕТ'."),
-            context_type="observer",
-            messages=memory_to_messages(memory),
+            prompt=None,
+            context_type="random",
+            messages=messages,
             chat_id=chat_id, user_id=user_id, platform=platform,
         )
     except Exception as exc:
         logger.info(f"autonomous ask {chat_key}: {exc}")
-        return
-    # Пока модель думала, в чате могли написать ещё — не отвечаем на устаревший контекст.
-    if not memory or memory[-1] is not last_entry:
         return
     if not answer or not answer.strip() or answer.strip().upper() in ("НЕТ", "NO"):
         return
@@ -243,9 +233,6 @@ async def random_post_loop() -> None:
                 chat_id = int(entry.get("id") or 0)
                 if time.time() - _last_autonomous.get(f"tg_{chat_id}", 0) < AUTONOMOUS_COOLDOWN:
                     continue
-                chance = 0.15 if entry.get("kind") == "private" else 0.6
-                if random.random() > chance:
-                    continue
                 _last_autonomous[f"tg_{chat_id}"] = time.time()
                 await _autonomous_post("tg", chat_id, int(entry.get("owner_id") or 0))
         except Exception as exc:
@@ -284,9 +271,6 @@ async def ds_autonomous_loop() -> None:
             for entry in candidates:
                 chat_id = int(entry.get("id") or 0)
                 if time.time() - _last_autonomous.get(f"ds_{chat_id}", 0) < AUTONOMOUS_COOLDOWN:
-                    continue
-                chance = 0.15 if entry.get("kind") == "private" else 0.6
-                if random.random() > chance:
                     continue
                 _last_autonomous[f"ds_{chat_id}"] = time.time()
                 await _autonomous_post("ds", chat_id, int(entry.get("owner_id") or 0))

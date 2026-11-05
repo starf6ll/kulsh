@@ -991,14 +991,14 @@ async def ask_ai_async(
             base_context = build_system_prompt(platform, chat_id or 0, user_id or 0)
 
     if context_type == "random":
-        prompt = ("Напиши одну короткую спонтанную реплику по-русски, как кент в обычном чате: строчными буквами, "
+        prompt = ("Напиши спонтанную мысль или шутку по-русски, как кент в обычном чате: строчными буквами, "
                   "без вежливого вступления, шаблонного ИИ-тона и рассуждений о себе как о нейросети. "
-                  "Не продолжай предыдущие реплики бота и не создавай диалог с самим собой. Если реплика естественно "
-                  "раскладывается на две мысли — раздели их маркером !separate, не переносами строк."
+                  "Можешь написать несколько коротких сообщений подряд через !separate, если тебя несёт; "
+                  "не ограничивай себя одним сообщением."
                   if lang == "ru" else
-                  "Write one short spontaneous chat line in a casual, natural voice. Avoid formal greetings, AI clichés, "
-                  "talking to yourself, or continuing the bot's previous messages. If it naturally has two thoughts, "
-                  "split them with !separate, not newlines.")
+                  "Write a spontaneous thought or joke in a casual, natural voice. Avoid formal greetings, AI clichés, "
+                  "or talking about yourself as a neural network. You may send several short messages in a row "
+                  "using !separate; do not limit yourself to one message.")
     elif context_type == "caption":
         prompt = ("Пользователь попросил фото. Придумай короткую подпись в своём стиле."
                   if lang == "ru" else

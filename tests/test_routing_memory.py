@@ -193,6 +193,18 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         finally:
             agent._groups = old_groups
 
+    async def test_autonomous_post_ignores_who_spoke_last(self):
+        from src import loops
+        memory = deque([{"type": "bot", "ts": 1, "text": "я тут сам с собой"}])
+        with patch.object(loops, "get_chat_memory", return_value=memory), \
+                patch.object(loops, "memory_to_messages", return_value=[{"role": "model", "text": "..."}]), \
+                patch.object(loops, "ask_ai_async", AsyncMock(return_value="раз!separateдва")) as ask, \
+                patch.object(loops.agent, "deliver_message", AsyncMock(return_value=True)), \
+                patch.object(loops, "add_bot_memory"):
+            await loops._autonomous_post("tg", 1, 0)
+        self.assertEqual(ask.await_args.kwargs["context_type"], "random")
+        self.assertIsNotNone(ask.await_args.kwargs["messages"])
+
     async def test_process_drawing_accepts_native_svg(self):
         from src import draw
         result = await draw.process_drawing(
