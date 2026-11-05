@@ -95,6 +95,7 @@ from src.util import (
     clean_extra_text,
     clean_json_text,
     extract_reaction_and_why,
+    extract_agent_actions,
     human_uptime,
     markdown_like_to_telegram_html,
     process_ai_response,
@@ -1484,6 +1485,10 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
             if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
 
+    # Сначала вынимаем !tell/!notify_owner/!refuse. Иначе !image внутри !tell
+    # перехватится текущим чатом и уйдёт не туда.
+    answer_raw, agent_actions = extract_agent_actions(answer_raw or "")
+
     draw_png = None
     draw_before = ""
     draw_after = ""
@@ -1577,8 +1582,6 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
         separate_enabled=separate_enabled,
     )
 
-    agent_actions = [m for m in markers if m.startswith(("tell:", "notify_owner:", "refuse:"))]
-    markers = [m for m in markers if m not in agent_actions]
     agent_reports: list[str] = []
     display_name = getattr(message.from_user, "full_name", "") or "пользователь"
     for action in agent_actions:

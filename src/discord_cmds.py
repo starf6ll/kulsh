@@ -72,6 +72,7 @@ from src.util import (
     clean_json_text,
     download_image_bytes,
     ds_user,
+    extract_agent_actions,
     extract_reaction_and_why,
     extract_video_frame,
     find_media_by_message_id,
@@ -458,6 +459,10 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
 
+    # Сначала вынимаем !tell/!notify_owner/!refuse. Иначе !image внутри !tell
+    # перехватится текущим каналом и уйдёт не туда.
+    answer_raw, agent_actions = extract_agent_actions(answer_raw or "")
+
     # ---- image generation / draw / term ----
     draw_png = None
     draw_before = ""
@@ -548,8 +553,6 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         separate_enabled=separate_enabled,
     )
 
-    agent_actions = [m for m in markers if m.startswith(("tell:", "notify_owner:", "refuse:"))]
-    markers = [m for m in markers if m not in agent_actions]
     agent_reports: list[str] = []
     display_name = str(getattr(message.author, "display_name", "пользователь"))
     is_private_chat = message.guild is None

@@ -1268,6 +1268,24 @@ def _extract_tells(text: str) -> tuple[str, list[str]]:
     return text, markers
 
 
+def extract_agent_actions(text: str) -> tuple[str, list[str]]:
+    """Вырезать только действия агента (!tell/!notify_owner/!refuse).
+
+    Это нужно делать ДО обработки !image/!draw: иначе картинка, вложенная в
+    !tell, перехватывается текущим чатом и уходит не туда.
+    """
+    text = text or ""
+    text, tell_markers = _extract_tells(text)
+    markers: list[str] = list(tell_markers)
+    for match in NOTIFY_OWNER_PATTERN.finditer(text):
+        markers.append(f"notify_owner:{match.group(1).strip()}")
+    text = NOTIFY_OWNER_PATTERN.sub(' ', text)
+    for match in REFUSE_PATTERN.finditer(text):
+        markers.append(f"refuse:{match.group(1).strip()}")
+    text = REFUSE_PATTERN.sub(' ', text)
+    return text.strip(), markers
+
+
 def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
     text = text or ""
     markers: list[str] = []
@@ -1302,6 +1320,11 @@ def dedupe_markers(markers: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for m in markers:
+        # !tell — не команда-флаг, а действие: пользователь может попросить
+        # отправить сколько угодно сообщений, в том числе одинаковых.
+        if m.startswith("tell:"):
+            out.append(m)
+            continue
         if m not in seen:
             seen.add(m)
             out.append(m)

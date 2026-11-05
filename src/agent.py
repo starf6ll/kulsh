@@ -153,12 +153,72 @@ async def send_dm(platform: str, user_id: int, text: str) -> bool:
     return await _send_text(platform, int(user_id), text, dm=True)
 
 
-async def find_targets(platform: str, query: str) -> list[dict[str, Any]]:
+async def _ds_channel_targets(query: str, context_chat_id: int = 0) -> list[dict[str, Any]]:
+    """Найти текстовые каналы Discord по названию среди серверов бота."""
+    try:
+        from src.discord_cmds import ds_bot
+    except Exception:
+        return []
+    if ds_bot is None:
+        return []
+    needle = " ".join(query.strip().lstrip("@").casefold().replace("-", " ").replace("_", " ").split())
+    if not needle:
+        return []
+
+    current_guilds: list[Any] = []
+    other_guilds: list[Any] = []
+    try:
+        current = ds_bot.get_channel(int(context_chat_id)) if context_chat_id else None
+        guild = getattr(current, "guild", None)
+        if guild is not None:
+            current_guilds.append(guild)
+    except Exception:
+        pass
+    for guild in getattr(ds_bot, "guilds", []) or []:
+        if guild not in current_guilds:
+            other_guilds.append(guild)
+
+    def _scan(guilds: list[Any]) -> list[dict[str, Any]]:
+        exact: list[dict[str, Any]] = []
+        partial: list[dict[str, Any]] = []
+        for guild in guilds:
+            for channel in getattr(guild, "text_channels", []) or []:
+                try:
+                    if not channel.permissions_for(guild.me).send_messages:
+                        continue
+                except Exception:
+                    continue
+                name = " ".join(str(getattr(channel, "name", "") or "").casefold()
+                                .replace("-", " ").replace("_", " ").split())
+                if not name:
+                    continue
+                entry = {
+                    "platform": "ds", "id": int(channel.id), "kind": "channel",
+                    "title": name, "guild_id": int(getattr(guild, "id", 0) or 0),
+                }
+                if needle == name:
+                    exact.append(entry)
+                elif needle in name:
+                    partial.append(entry)
+        return exact or partial
+
+    # Сначала ищем на текущем сервере: так «секретный чат» не превращается
+    # в одноимённый канал другого сервера или в Telegram-группу.
+    found = _scan(current_guilds)
+    return found or _scan(other_guilds)
+
+
+async def find_targets(platform: str, query: str, context_chat_id: int = 0) -> list[dict[str, Any]]:
     """Люди из контактов и известные группы/каналы — всё, куда можно написать."""
     from src import chats
     targets = [{**item, "kind": "user"} for item in find_contacts(platform, query)]
     for entry in chats.find(platform, query):
         targets.append({**entry, "kind": "chat"})
+    if platform == "ds":
+        known = {int(item.get("id") or 0) for item in targets}
+        for entry in await _ds_channel_targets(query, context_chat_id):
+            if int(entry.get("id") or 0) not in known:
+                targets.append({**entry, "kind": "chat"})
     return targets
 
 
@@ -190,8 +250,13 @@ async def _send_photo(platform: str, chat_id: int, png: bytes, caption: str = ""
                       *, dm: bool = False) -> bool:
     try:
         if platform == "tg":
+            import io
+            from telebot.types import InputFile
             from src.telegram import tg_bot
-            await tg_bot.send_photo(int(chat_id), png, caption=(caption or "")[:1000])
+            await tg_bot.send_photo(
+                int(chat_id), InputFile(io.BytesIO(png), file_name="drawing.png"),
+                caption=(caption or "")[:1000],
+            )
             return True
         if platform == "ds":
             import io
@@ -216,8 +281,8 @@ async def _outgoing_image(platform: str, chat_id: int, user_id: int,
                           spec: dict[str, Any] | None, prompt: str) -> bytes | None:
     """Картинка для межчатового/самостоятельного сообщения: !image, затем Paint."""
     from src.image_gen import generate_for_user, image_can_generate
-    from src.util import get_user_config
-    cfg = get_user_config(platform, chat_id, user_id)
+    from src.util import get_effective_config
+    cfg = get_effective_config(platform, chat_id, user_id)
     choice = cfg.get("image_model", "auto")
     if spec is not None and choice != "paint" and image_can_generate(platform, user_id, choice):
         try:
@@ -229,7 +294,11 @@ async def _outgoing_image(platform: str, chat_id: int, user_id: int,
     try:
         from src.ai import ask_paint
         from src.draw import process_drawing
-        raw = await ask_paint(prompt or "нарисуй картинку", platform, chat_id, user_id)
+        paint_prompt = ""
+        if isinstance(spec, dict):
+            paint_prompt = str(spec.get("prompt") or "").strip()
+        paint_prompt = paint_prompt or prompt or "нарисуй картинку"
+        raw = await ask_paint(paint_prompt, platform, chat_id, user_id)
         result = await process_drawing(raw or "")
         if result.png is not None:
             return result.png.getvalue()
@@ -242,8 +311,11 @@ async def deliver_message(platform: str, chat_id: int, text: str, *, user_id: in
                           dm: bool = False) -> bool:
     """Отправить сообщение, обработав !separate, !image и !draw."""
     from src.image_gen import extract_image_parts
-    from src.util import process_ai_response, scrub_stray_markers, take_reply_target
+    from src.util import extract_agent_actions, process_ai_response, scrub_stray_markers, take_reply_target
 
+    # !tell/!notify_owner/!refuse не должны попадать в текст и не должны
+    # перехватывать вложенный !image/!draw: иначе картинка уйдёт не в тот чат.
+    text, _actions = extract_agent_actions(text or "")
     try:
         spec, before, after = extract_image_parts(text or "")
     except Exception:
@@ -357,12 +429,32 @@ async def tell(platform: str, chat_id: int, is_private: bool, requester_id: int,
     if stripped_query.lower().startswith(("tg:", "ds:")):
         target_platform = stripped_query[:2].lower()
         query = stripped_query[3:].strip()
-    matches = await find_targets(target_platform, query)
+    matches = await find_targets(
+        target_platform, query,
+        context_chat_id=chat_id if target_platform == platform else 0,
+    )
     unique: dict[str, dict[str, Any]] = {}
     for item in matches:
         unique[f"{item.get('kind')}:{item.get('id')}"] = item
     if not unique:
         return {"ok": False, "reason": "not_found", "query": query.strip()[:40]}
+
+    def _match_score(item: dict[str, Any]) -> int:
+        q = query.strip().casefold()
+        names = [
+            str(item.get("display") or "").casefold(),
+            str(item.get("title") or "").casefold(),
+            str(item.get("username") or "").casefold(),
+        ]
+        if any(name and name == q for name in names):
+            return 2
+        if any(name and q in name for name in names):
+            return 1
+        return 0
+
+    best_score = max(_match_score(item) for item in unique.values())
+    if best_score > 0 and len(unique) > 1:
+        unique = {key: item for key, item in unique.items() if _match_score(item) == best_score}
     if len(unique) > 1:
         names = [str(item.get("display") or item.get("title") or item.get("id"))[:40]
                  for item in unique.values()][:5]

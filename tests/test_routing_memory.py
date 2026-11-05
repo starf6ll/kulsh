@@ -98,6 +98,28 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(markers[0].startswith("tell:Кенты\x1fвот !image"))
         self.assertIn('"width":100', markers[0])
 
+    def test_agent_actions_are_removed_before_image_processing(self):
+        cleaned, actions = util.extract_agent_actions(
+            'ща\n!tell Кенты :: !image\n```json\n{"prompt":"мопс"}\n```'
+        )
+        self.assertEqual(cleaned, "ща")
+        self.assertEqual(len(actions), 1)
+        self.assertTrue(actions[0].startswith("tell:Кенты\x1f!image"))
+        self.assertIn('"prompt":"мопс"', actions[0])
+
+    def test_duplicate_tells_are_not_deduped(self):
+        markers = ["tell:Кенты\x1fпривет", "tell:Кенты\x1fпривет", "sticker", "sticker"]
+        self.assertEqual(
+            util.dedupe_markers(markers),
+            ["tell:Кенты\x1fпривет", "tell:Кенты\x1fпривет", "sticker"],
+        )
+
+    def test_memory_fact_is_trimmed(self):
+        long_fact = "Петя: " + "а" * 1000
+        cleaned = ai._clean_memory_fact(long_fact)
+        self.assertLessEqual(len(cleaned), ai.MEMORY_FACT_MAX_CHARS)
+        self.assertTrue(cleaned.startswith("Петя:"))
+
     def test_reply_target(self):
         self.assertEqual(util.take_reply_target("!reply:123 привет"), ("привет", 123))
         self.assertEqual(util.take_reply_target("привет"), ("привет", None))

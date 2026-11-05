@@ -166,25 +166,34 @@ async def _autonomous_candidates(platform: str) -> list[dict[str, Any]]:
 
 
 async def _autonomous_post(platform: str, chat_id: int, user_id: int = 0) -> None:
-    """Одна самостоятельная реплика бота в конкретном чате."""
+    """Одна самостоятельная реплика бота в конкретном чате.
+
+    Как в старой версии: бот не сочиняет реплику в вакууме, а смотрит на
+    живую историю чата. Если последнее сообщение — его собственное или
+    разговор давно заглох, он молчит, чтобы не спамить шаблонами.
+    """
     chat_key = f"{platform}_{chat_id}"
     memory = get_chat_memory(chat_key)
-    recent = bool(memory) and time.time() - float(memory[-1].get("ts") or 0) < 1800
+    if not memory:
+        return
+    last_entry = memory[-1]
+    if last_entry.get("type") != "user":
+        return
+    if time.time() - float(last_entry.get("ts") or 0) > 1800:
+        return
     try:
-        if recent:
-            answer = await ask_ai_async(
-                prompt=("Посмотри на историю чата. Если хочешь что-то добавить, пошутить или "
-                        "сказать своё мнение — напиши одно короткое сообщение. Если нет — ответь ровно 'НЕТ'."),
-                context_type="observer",
-                messages=memory_to_messages(memory),
-                chat_id=chat_id, user_id=user_id, platform=platform,
-            )
-        else:
-            answer = await ask_ai_async(
-                context_type="random", chat_id=chat_id, user_id=user_id, platform=platform,
-            )
+        answer = await ask_ai_async(
+            prompt=("Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно "
+                    "короткое сообщение. Если нет — ответь ровно 'НЕТ'."),
+            context_type="observer",
+            messages=memory_to_messages(memory),
+            chat_id=chat_id, user_id=user_id, platform=platform,
+        )
     except Exception as exc:
         logger.info(f"autonomous ask {chat_key}: {exc}")
+        return
+    # Пока модель думала, в чате могли написать ещё — не отвечаем на устаревший контекст.
+    if not memory or memory[-1] is not last_entry:
         return
     if not answer or not answer.strip() or answer.strip().upper() in ("НЕТ", "NO"):
         return
