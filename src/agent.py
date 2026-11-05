@@ -426,13 +426,21 @@ async def tell(platform: str, chat_id: int, is_private: bool, requester_id: int,
         return {"ok": False, "reason": "empty", "query": query.strip()[:40]}
     target_platform = platform
     stripped_query = query.strip()
-    if stripped_query.lower().startswith(("tg:", "ds:")):
+    explicit_platform = stripped_query.lower().startswith(("tg:", "ds:"))
+    if explicit_platform:
         target_platform = stripped_query[:2].lower()
         query = stripped_query[3:].strip()
     matches = await find_targets(
         target_platform, query,
         context_chat_id=chat_id if target_platform == platform else 0,
     )
+    # Модель иногда по ошибке ставит чужой префикс (tg: в Discord). Если там
+    # ничего не нашлось, пробуем текущую платформу, а не сдаёмся.
+    if explicit_platform and target_platform != platform and not matches:
+        fallback = await find_targets(platform, query, context_chat_id=chat_id)
+        if fallback:
+            target_platform = platform
+            matches = fallback
     unique: dict[str, dict[str, Any]] = {}
     for item in matches:
         unique[f"{item.get('kind')}:{item.get('id')}"] = item
