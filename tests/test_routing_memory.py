@@ -24,6 +24,17 @@ class OutputTests(unittest.TestCase):
         messages = util.memory_to_messages(deque([{"type": "bot", "text": "привет", "time": "20:39"}]))
         self.assertEqual(messages[0]["text"], "[20:39] привет")
 
+    def test_usage_tokens_ignore_cached_input(self):
+        usage = {"prompt_tokens": 10000, "completion_tokens": 200,
+                 "prompt_tokens_details": {"cached_tokens": 8000}}
+        self.assertEqual(ai._usage_tokens(usage, "x"), 2200)
+
+    def test_private_config_hides_random_setting(self):
+        from src import ui
+        random_label = util.tr("ru", "cfg_random")
+        self.assertNotIn(random_label, ui.config_text("tg", 42, 42))
+        self.assertIn(random_label, ui.config_text("tg", -100, 42))
+
     def test_system_role_is_not_embedded_in_user_content(self):
         messages = ai._to_openai_messages([{"role": "user", "parts": [{"text": "hi"}]}], "rules", True)
         self.assertEqual([m["role"] for m in messages], ["system", "user"])
@@ -41,6 +52,37 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             result = await ai._pick_auto_models(True, "сложная задача", False, "tg", 1, "default")
         self.assertNotIn("deepseek-v4-pro", result)
         self.assertFalse(any(ai.is_paid_model(m) for m in result))
+
+    async def test_observer_prompt_is_user_message_and_skips_summary(self):
+        key = "tg_-100"
+        ai.long_term_memory[key] = {
+            "facts": ["Фолз любит чай " + "x" * 200],
+            "events": [{"date": "12.11", "text": "тест"}],
+            "summary": "СТАРОЕ РЕЗЮМЕ",
+        }
+        captured = []
+
+        async def fake_chat(provider, url, api_key, model_name, messages, temp):
+            captured.extend(messages)
+            return "тихо тут", None
+
+        try:
+            with patch.object(ai, "_pick_auto_models", AsyncMock(return_value=["deepseek-v4.1-flash"])), \
+                    patch.object(ai, "_ask_openai_chat", fake_chat):
+                out = await ai.ask_ai_async(
+                    prompt="Посмотри на историю чата.",
+                    context_type="observer",
+                    messages=[{"role": "user", "text": "привет"}],
+                    chat_id=-100, user_id=0,
+                )
+            self.assertEqual(out, "тихо тут")
+        finally:
+            ai.long_term_memory.pop(key, None)
+        system = captured[0]["content"]
+        self.assertNotIn("СТАРОЕ РЕЗЮМЕ", system)  # автономный пост не тянет сводку
+        self.assertTrue(system.rstrip().endswith("не ставь."))
+        self.assertEqual(captured[-1]["role"], "user")
+        self.assertIn("Ты молча наблюдаешь за чатом", captured[-1]["content"])
 
     async def test_summary_incremental_and_no_repeat_call(self):
         key = "test_summary"
@@ -193,7 +235,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         finally:
             agent._groups = old_groups
 
-    async def test_autonomous_post_ignores_who_spoke_last(self):
+    async def test_autonomous_post_uses_observer_when_history_exists(self):
         from src import loops
         memory = deque([{"type": "bot", "ts": 1, "text": "я тут сам с собой"}])
         with patch.object(loops, "get_chat_memory", return_value=memory), \
@@ -201,9 +243,40 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(loops, "ask_ai_async", AsyncMock(return_value="раз!separateдва")) as ask, \
                 patch.object(loops.agent, "deliver_message", AsyncMock(return_value=True)), \
                 patch.object(loops, "add_bot_memory"):
-            await loops._autonomous_post("tg", 1, 0)
-        self.assertEqual(ask.await_args.kwargs["context_type"], "random")
+            await loops._autonomous_post("tg", -100, 0)
+        self.assertEqual(ask.await_args.kwargs["context_type"], "observer")
         self.assertIsNotNone(ask.await_args.kwargs["messages"])
+
+    async def test_autonomous_post_uses_random_without_history(self):
+        from src import loops
+        memory = deque()
+        with patch.object(loops, "get_chat_memory", return_value=memory), \
+                patch.object(loops, "ask_ai_async", AsyncMock(return_value="тихо тут")) as ask, \
+                patch.object(loops.agent, "deliver_message", AsyncMock(return_value=True)), \
+                patch.object(loops, "add_bot_memory"):
+            await loops._autonomous_post("tg", -100, 0)
+        self.assertEqual(ask.await_args.kwargs["context_type"], "random")
+
+    async def test_autonomous_post_never_writes_to_private_chat(self):
+        from src import loops
+        with patch.object(loops, "ask_ai_async", AsyncMock(return_value="x")) as ask, \
+                patch.object(loops.agent, "deliver_message", AsyncMock(return_value=True)) as send:
+            await loops._autonomous_post("tg", 42, 0)
+        ask.assert_not_awaited()
+        send.assert_not_awaited()
+
+    async def test_autonomous_candidates_skip_private_chats(self):
+        from src import chats, loops
+        old_chats = chats._chats
+        try:
+            chats._chats = {
+                "tg:-100": {"platform": "tg", "id": -100, "kind": "group", "title": "Кенты"},
+                "tg:42": {"platform": "tg", "id": 42, "kind": "private", "title": "Личка"},
+            }
+            found = await loops._autonomous_candidates("tg")
+            self.assertEqual([entry["id"] for entry in found], [-100])
+        finally:
+            chats._chats = old_chats
 
     async def test_process_drawing_accepts_native_svg(self):
         from src import draw

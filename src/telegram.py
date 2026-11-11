@@ -522,10 +522,13 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         cfg["random_reply_enabled"] = not cfg.get("random_reply_enabled", False)
         save_user_configs()
     elif action == "random":
-        if not is_private and not group_admin:
+        if is_private:
+            await tg_bot.answer_callback_query(cb_id(call), "в личке автономных сообщений нет", show_alert=True)
+            return
+        if not group_admin:
             await tg_bot.answer_callback_query(cb_id(call), "только админ группы", show_alert=True)
             return
-        random_cfg = cfg if is_private else get_user_config("tg", chat_id, 0)
+        random_cfg = get_user_config("tg", chat_id, 0)
         random_cfg["random_messages_enabled"] = not random_cfg.get("random_messages_enabled", True)
         save_user_configs()
     elif action == "websearch":

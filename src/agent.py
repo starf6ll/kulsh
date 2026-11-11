@@ -308,10 +308,17 @@ async def _outgoing_image(platform: str, chat_id: int, user_id: int,
 
 
 async def deliver_message(platform: str, chat_id: int, text: str, *, user_id: int = 0,
-                          dm: bool = False) -> bool:
+                          dm: bool = False, clean_style: bool = False) -> bool:
     """Отправить сообщение, обработав !separate, !image и !draw."""
     from src.image_gen import extract_image_parts
     from src.util import extract_agent_actions, process_ai_response, scrub_stray_markers, take_reply_target
+
+    def _clean(segment: str) -> str:
+        segment = scrub_stray_markers(segment).strip()
+        if clean_style:
+            from src.util import strip_chat_emojis
+            segment = strip_chat_emojis(segment)
+        return segment
 
     # !tell/!notify_owner/!refuse не должны попадать в текст и не должны
     # перехватывать вложенный !image/!draw: иначе картинка уйдёт не в тот чат.
@@ -337,11 +344,11 @@ async def deliver_message(platform: str, chat_id: int, text: str, *, user_id: in
     ok = True
     for segment in segments:
         segment, _reply_target = take_reply_target(segment)
-        segment = scrub_stray_markers(segment).strip()
+        segment = _clean(segment)
         if segment:
             ok = await _send_text(platform, chat_id, segment, dm=dm) and ok
 
-    caption = scrub_stray_markers(after or "").strip()
+    caption = _clean(after or "")
     if spec is not None:
         png = await _outgoing_image(platform, chat_id, user_id, spec, before or text)
         if png:

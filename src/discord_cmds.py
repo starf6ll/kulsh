@@ -752,7 +752,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
 # ============================================================
 # CONFIG
 # ============================================================
-def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
+def ds_config_embed(chat_id: int, user_id: int, is_dm: bool = False) -> discord.Embed:
     scope = get_ds_scope(chat_id)
     cfg = get_effective_config("ds", chat_id, user_id)
     lang = cfg.get("language", "ru")
@@ -795,9 +795,11 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="✏️ Рисование", value=drawing, inline=True)
         embed.add_field(name="🎭 Стикеры/гифки", value=stickers, inline=True)
         embed.add_field(name="🗣 Автоответ", value=autoreply, inline=True)
-        embed.add_field(name="📢 Случайные", value=random_msgs, inline=True)
+        if not is_dm:
+            embed.add_field(name="📢 Случайные", value=random_msgs, inline=True)
         embed.add_field(name="🎬 Серия", value=series, inline=True)
         embed.add_field(name="📝 Кастомный промпт", value=prompt, inline=False)
+        random_cmd = "" if is_dm else "`кульш конфиг рандом вкл|выкл`\n"
         embed.add_field(
             name="📖 Команды",
             value=(
@@ -811,7 +813,7 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
                 "`кульш конфиг реакции вкл|выкл`\n"
                 "`кульш конфиг стикеры вкл|выкл`\n"
                 "`кульш конфиг автоответ вкл|выкл`\n"
-                "`кульш конфиг рандом вкл|выкл`\n"
+                + random_cmd +
                 "`кульш конфиг поиск вкл|выкл`\n"
                 "`кульш конфиг промпт <текст|сброс>`"
             ),
@@ -829,7 +831,8 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="✏️ Drawing", value=drawing, inline=True)
         embed.add_field(name="🎭 Stickers/GIFs", value=stickers, inline=True)
         embed.add_field(name="🗣 Auto-reply", value=autoreply, inline=True)
-        embed.add_field(name="📢 Random", value=random_msgs, inline=True)
+        if not is_dm:
+            embed.add_field(name="📢 Random", value=random_msgs, inline=True)
         embed.add_field(name="🎬 Series", value=series, inline=True)
         embed.add_field(name="📝 Custom prompt", value=prompt, inline=False)
     return embed
@@ -902,9 +905,13 @@ class DsConfigView(discord.ui.View):
             discord.SelectOption(label=f"{tr(lang, 'cfg_image_model')}: {image_model_label(cfg.get('image_model', 'auto'), lang)}", value="image_model"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_stickers')}: {b('stickers_enabled')}", value="stickers_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_autoreply')}: {b('random_reply_enabled', False)}", value="random_reply_enabled"),
-            discord.SelectOption(label=f"{tr(lang, 'cfg_random')}: {b('random_messages_enabled')}", value="random_messages_enabled"),
             discord.SelectOption(label=tr(lang, "cfg_edit_prompt"), value="prompt"),
         ]
+        if not self.is_dm:
+            options.insert(11, discord.SelectOption(
+                label=f"{tr(lang, 'cfg_random')}: {b('random_messages_enabled')}",
+                value="random_messages_enabled",
+            ))
         if self.is_admin and not self.is_dm:
             options.append(discord.SelectOption(
                 label=f"🌐 Межчатовые сообщения: {'✅' if agent.group_setting('ds', self.chat_id, 'cross_chat_enabled', False) else '❌'}",
@@ -955,7 +962,7 @@ class DsConfigView(discord.ui.View):
 
     async def _refresh_main(self, interaction: discord.Interaction) -> None:
         self._rebuild()
-        embed = ds_config_embed(self.chat_id, self.user_id)
+        embed = ds_config_embed(self.chat_id, self.user_id, self.is_dm)
         try:
             await interaction.response.edit_message(embed=embed, view=self)
         except Exception:
@@ -967,7 +974,7 @@ class DsConfigView(discord.ui.View):
     async def _open_choice(self, interaction: discord.Interaction, kind: str) -> None:
         self._rebuild()
         sub = DsChoiceView(self, kind)
-        embed = ds_config_embed(self.chat_id, self.user_id)
+        embed = ds_config_embed(self.chat_id, self.user_id, self.is_dm)
         try:
             await interaction.response.edit_message(embed=embed, view=sub)
         except Exception:
@@ -986,6 +993,12 @@ class DsConfigView(discord.ui.View):
             "stickers_enabled": True, "random_reply_enabled": False, "random_messages_enabled": True,
         }
         if value in toggle_keys:
+            if value == "random_messages_enabled" and self.is_dm:
+                await interaction.response.send_message(
+                    "в личке автономных сообщений нет" if self._lang() == "ru" else "no random messages in DMs",
+                    ephemeral=True,
+                )
+                return
             cfg = self._write()
             cfg[value] = not cfg.get(value, toggle_keys[value])
             if cfg.get("separate_enabled", True) and cfg.get("streaming_enabled", False):
@@ -1078,7 +1091,7 @@ class DsConfigView(discord.ui.View):
         save_user_configs()
         try:
             await interaction.response.edit_message(
-                embed=ds_config_embed(self.chat_id, self.user_id), view=None,
+                embed=ds_config_embed(self.chat_id, self.user_id, self.is_dm), view=None,
             )
             await interaction.followup.send(tr(lang, "cfg_done"), ephemeral=True)
             return
@@ -1087,7 +1100,7 @@ class DsConfigView(discord.ui.View):
         try:
             await interaction.response.defer()
             await interaction.edit_original_response(
-                embed=ds_config_embed(self.chat_id, self.user_id), view=None,
+                embed=ds_config_embed(self.chat_id, self.user_id, self.is_dm), view=None,
             )
             await interaction.followup.send(tr(lang, "cfg_done"), ephemeral=True)
         except Exception:
@@ -1204,7 +1217,7 @@ class DsChoiceView(discord.ui.View):
                 except ValueError:
                     company_index = 0
                 await interaction.response.edit_message(
-                    embed=ds_config_embed(p.chat_id, p.user_id),
+                    embed=ds_config_embed(p.chat_id, p.user_id, p.is_dm),
                     view=DsModelView(p, company_index),
                 )
                 return
@@ -1269,7 +1282,7 @@ class DsModelView(discord.ui.View):
             return
         save_user_configs()
         await interaction.response.edit_message(
-            embed=ds_config_embed(self.parent.chat_id, self.parent.user_id),
+            embed=ds_config_embed(self.parent.chat_id, self.parent.user_id, self.parent.is_dm),
             view=DsModelView(self.parent, self.company_index),
         )
 
@@ -1282,7 +1295,7 @@ async def ds_handle_config(message: discord.Message, user_id: int) -> None:
     member = as_member(message.author)
     is_dm = message.guild is None
     is_admin = bool(member and member.guild_permissions.administrator) if message.guild else True
-    embed = ds_config_embed(chat_id, user_id)
+    embed = ds_config_embed(chat_id, user_id, is_dm)
     view = DsConfigView(chat_id, user_id, is_admin, is_dm=is_dm)
     await message.reply(embed=embed, view=view)
 
@@ -1368,6 +1381,10 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
         cfg["random_reply_enabled"] = bool_on; save_user_configs()
         await message.reply(tr(lang, "ds_setting_autoreply", tr(lang, "on") if bool_on else tr(lang, "off")))
     elif param in ("рандом", "random"):
+        if message.guild is None:
+            await message.reply("в личке автономных сообщений нет" if lang == "ru"
+                                else "no random messages in DMs")
+            return
         cfg["random_messages_enabled"] = bool_on; save_user_configs()
         await message.reply(tr(lang, "ds_setting_random", tr(lang, "on") if bool_on else tr(lang, "off")))
     elif param in ("поиск", "search"):
@@ -1513,7 +1530,7 @@ class DsMenuView(discord.ui.View):
         if interaction.guild:
             is_admin = bool(member and member.guild_permissions.administrator)
         view = DsConfigView(chat_id, user_id, is_admin, is_dm=interaction.guild is None)
-        embed = ds_config_embed(chat_id, user_id)
+        embed = ds_config_embed(chat_id, user_id, interaction.guild is None)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     async def _on_help(self, interaction: discord.Interaction) -> None:
@@ -1966,7 +1983,7 @@ async def ds_slash_config(interaction: discord.Interaction, scope: str | None = 
     cur_scope = get_ds_scope(chat_id)
     is_dm = interaction.guild is None
     view = DsConfigView(chat_id, user_id, is_admin, is_dm=is_dm)
-    embed = ds_config_embed(chat_id, user_id)
+    embed = ds_config_embed(chat_id, user_id, is_dm)
     if cur_scope == "shared" and not is_admin:
         # не админ — видит настройки, но кнопки неактивны
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)

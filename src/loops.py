@@ -147,13 +147,16 @@ AUTONOMOUS_COOLDOWN = 7200
 
 
 async def _autonomous_candidates(platform: str) -> list[dict[str, Any]]:
-    """Все чаты, где бот имеет право писать сам: группы, каналы и личка."""
+    """Все группы и каналы, где бот имеет право писать сам.
+
+    В личке автономных сообщений нет вообще — только группы и серверы.
+    """
     from src import chats
     found: list[dict[str, Any]] = []
     for entry in chats.all_chats():
         if entry.get("platform") != platform:
             continue
-        if entry.get("kind") not in ("group", "channel", "private"):
+        if entry.get("kind") not in ("group", "channel"):
             continue
         chat_id = int(entry.get("id") or 0)
         if not chat_id:
@@ -162,26 +165,43 @@ async def _autonomous_candidates(platform: str) -> list[dict[str, Any]]:
                 "random_messages_enabled", True):
             continue
         found.append(entry)
+    # Старый random_post_loop всегда писал в TG_TARGET_CHAT. Если после
+    # рестарта бот ещё не получал там сообщений, реестр пуст — добавляем
+    # этот чат, чтобы автономные сообщения не пропадали.
+    if platform == "tg" and TG_TARGET_CHAT < 0:
+        known = {int(entry.get("id") or 0) for entry in found}
+        if TG_TARGET_CHAT not in known:
+            found.append({"platform": "tg", "id": TG_TARGET_CHAT, "kind": "group",
+                          "title": str(TG_TARGET_CHAT), "owner_id": 0})
     return found
 
 
 async def _autonomous_post(platform: str, chat_id: int, user_id: int = 0) -> None:
     """Одна самостоятельная реплика бота в конкретном чате.
 
-    Раньше бот не проверял, кто написал последним и когда: он просто
-    выходил в чат и нёс что хотел, мог писать несколько сообщений подряд
-    и разговаривать сам с собой. Эту логику и возвращаем.
+    Это ровно старая логика до межчатовых сообщений: если в чате есть
+    история — бот смотрит на неё и решает, что добавить; если истории нет —
+    пишет спонтанную реплику. Кто написал последним и когда, не проверяется.
     """
+    from src import chats
+    if not chats.is_group(platform, chat_id):
+        return
     chat_key = f"{platform}_{chat_id}"
     memory = get_chat_memory(chat_key)
-    messages = memory_to_messages(memory) if memory else None
     try:
-        answer = await ask_ai_async(
-            prompt=None,
-            context_type="random",
-            messages=messages,
-            chat_id=chat_id, user_id=user_id, platform=platform,
-        )
+        if memory:
+            answer = await ask_ai_async(
+                prompt=("Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно "
+                        "короткое сообщение. Если нет — ответь ровно 'НЕТ'."),
+                context_type="observer",
+                messages=memory_to_messages(memory),
+                chat_id=chat_id, user_id=user_id, platform=platform,
+            )
+        else:
+            answer = await ask_ai_async(
+                prompt=None, context_type="random",
+                chat_id=chat_id, user_id=user_id, platform=platform,
+            )
     except Exception as exc:
         logger.info(f"autonomous ask {chat_key}: {exc}")
         return
@@ -194,7 +214,7 @@ async def _autonomous_post(platform: str, chat_id: int, user_id: int = 0) -> Non
     clean = [seg for seg in clean if seg]
     if not clean:
         return
-    await agent.deliver_message(platform, chat_id, answer, user_id=0)
+    await agent.deliver_message(platform, chat_id, answer, user_id=0, clean_style=True)
     for seg in clean:
         add_bot_memory(chat_key, seg)
     for marker_name in markers:
@@ -225,7 +245,7 @@ async def _autonomous_post(platform: str, chat_id: int, user_id: int = 0) -> Non
 async def random_post_loop() -> None:
     """Самостоятельные сообщения во всех группах Telegram, где бот состоит."""
     while True:
-        await asyncio.sleep(random.randint(1800, 3600))
+        await asyncio.sleep(random.randint(3600, 14400))
         try:
             candidates = await _autonomous_candidates("tg")
             random.shuffle(candidates)
@@ -264,7 +284,7 @@ async def ds_autonomous_loop() -> None:
     except Exception as exc:
         logger.info(f"ds_autonomous seed: {exc}")
     while True:
-        await asyncio.sleep(random.randint(1800, 3600))
+        await asyncio.sleep(random.randint(3600, 14400))
         try:
             candidates = await _autonomous_candidates("ds")
             random.shuffle(candidates)

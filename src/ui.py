@@ -81,6 +81,11 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
     stream_txt = on if cfg.get("streaming_enabled") else off
     search_txt = on if cfg.get("web_search_enabled", True) else off
     mode_txt = _mode_display(cfg, lang)
+    # В личке автономных сообщений нет, поэтому и настройки для них нет.
+    is_private = platform == "tg" and int(chat_id) > 0
+    random_line = "" if is_private else (
+        f"{tr(lang, 'cfg_random')}: {on if cfg.get('random_messages_enabled', True) else off}\n"
+    )
     return (
         f"# {tr(lang, 'cfg_title')}\n\n{line}\n\n"
         f"**{tr(lang, 'cfg_section_main')}**\n\n"
@@ -99,7 +104,7 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"**{tr(lang, 'cfg_section_chat')}**\n\n"
         f"{tr(lang, 'cfg_stickers')}: {on if cfg.get('stickers_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_autoreply')}: {on if cfg.get('random_reply_enabled') else off}\n"
-        f"{tr(lang, 'cfg_random')}: {on if cfg.get('random_messages_enabled', True) else off}\n\n"
+        f"{random_line}\n"
         f"{line}\n\n"
         f"**{tr(lang, 'cfg_section_other')}**\n\n"
         f"{tr(lang, 'cfg_edit_prompt')}: {prompt_safe}"
@@ -144,11 +149,15 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int,
         btn(f"{tr(lang, 'cfg_autoreply')}: {'✅' if cfg.get('random_reply_enabled') else '❌'}",
             style=None, callback_data=cb("autoreply")),
     )
-    kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(f"{tr(lang, 'cfg_random')}: {'✅' if random_cfg.get('random_messages_enabled', True) else '❌'}",
-            style=None, callback_data=cb("random")),
-        btn(tr(lang, "cfg_edit_prompt"), style="primary", callback_data=cb("prompt")),
-    )
+    if platform == "tg" and int(chat_id) > 0:
+        # В личке автономных сообщений нет — кнопка не показывается.
+        kb.row(btn(tr(lang, "cfg_edit_prompt"), style="primary", callback_data=cb("prompt")))
+    else:
+        kb.row(  # pyright: ignore[reportUnknownMemberType]
+            btn(f"{tr(lang, 'cfg_random')}: {'✅' if random_cfg.get('random_messages_enabled', True) else '❌'}",
+                style=None, callback_data=cb("random")),
+            btn(tr(lang, "cfg_edit_prompt"), style="primary", callback_data=cb("prompt")),
+        )
     if show_group_settings:
         kb.row(  # pyright: ignore[reportUnknownMemberType]
             btn(f"🌐 Межчатовые сообщения: {'✅' if group_cross else '❌'}",
