@@ -247,7 +247,7 @@ _PATH_TOKEN_RE = re.compile(r'([MmLlHhVvCcSsQqTtAaZz])|(-?\d*\.?\d+(?:e[-+]?\d+)
 
 def svg_path_points(d: str, steps: int = 24) -> list[tuple[str, float, float]]:
     """Грубый парсер SVG path → список точек (в пикселях) для полилинии.
-    Поддерживает M,L,H,V,C,Q,S,T,Z (A сводится к линии). Возвращает команды 'L'/'M'."""
+    Поддерживает M,L,H,V,C,Q,S,T,Z (A сводится к линии). Возвращает команды 'M'/'L'/'Z'."""
     tokens: list[Any] = []
     for m in _PATH_TOKEN_RE.finditer(d or ""):
         if m.group(1):
@@ -261,6 +261,7 @@ def svg_path_points(d: str, steps: int = 24) -> list[tuple[str, float, float]]:
     cmd = None
     prev_ctrl_x: float | None = None
     prev_ctrl_y: float | None = None
+    fresh_move = False
 
     def num() -> float:
         nonlocal i
@@ -274,8 +275,9 @@ def svg_path_points(d: str, steps: int = 24) -> list[tuple[str, float, float]]:
         if isinstance(tokens[i], str):
             cmd = tokens[i]
             i += 1
+            fresh_move = cmd in ("M", "m")
             if cmd in ("Z", "z"):
-                pts.append(("L", start_x, start_y))
+                pts.append(("Z", start_x, start_y))
                 cx, cy = start_x, start_y
             continue
         if cmd is None:
@@ -289,8 +291,12 @@ def svg_path_points(d: str, steps: int = 24) -> list[tuple[str, float, float]]:
             if rel:
                 x, y = cx + x, cy + y
             cx, cy = x, y
-            start_x, start_y = x, y
-            pts.append(("M", cx, cy))
+            if fresh_move:
+                start_x, start_y = x, y
+                pts.append(("M", cx, cy))
+            else:
+                pts.append(("L", cx, cy))
+            fresh_move = False
         elif verb == "L":
             x, y = num(), num()
             if rel:
@@ -369,6 +375,34 @@ def svg_path_points(d: str, steps: int = 24) -> list[tuple[str, float, float]]:
         else:
             i += 1
     return pts
+
+
+def svg_path_subpaths(d: str, steps: int = 24) -> list[tuple[list[tuple[float, float]], bool]]:
+    """Разбивает path на независимые подпути.
+
+    Раньше все команды одного path склеивались в одну линию: две птицы,
+    нарисованные как два `M...`, соединялись между собой. Теперь каждый
+    `M` начинает новый подпуть, а `Z` закрывает текущий.
+    """
+    result: list[tuple[list[tuple[float, float]], bool]] = []
+    current: list[tuple[float, float]] = []
+    for cmd, x, y in svg_path_points(d, steps):
+        if cmd == "M":
+            if current:
+                result.append((current, False))
+            current = [(x, y)]
+        elif cmd == "Z":
+            if current:
+                result.append((current, True))
+                current = []
+        else:
+            if not current:
+                current = [(x, y)]
+            else:
+                current.append((x, y))
+    if current:
+        result.append((current, False))
+    return result
 
 
 # ============================================================
@@ -467,13 +501,20 @@ def _render_element(img: Image.Image, el: JsonDict) -> None:
         pts = _points(el.get("points") or [])
         draw.line(pts, fill=as_rgba(fill or outline or "#FFFFFF"), width=width, joint="curve")
     elif kind == "svg":
-        pts = [(x, y) for _c, x, y in svg_path_points(json_str(el.get("d")), int(el.get("steps", 24)))]
-        if pts:
-            if el.get("closed"):
-                draw.polygon(pts, fill=as_rgba(fill) if fill else None,
+        subpaths = svg_path_subpaths(json_str(el.get("d")), int(el.get("steps", 24)))
+        for pts, sub_closed in subpaths:
+            if len(pts) < 2:
+                continue
+            closed = bool(sub_closed or (el.get("closed") and len(subpaths) == 1))
+            if closed and fill:
+                draw.polygon(pts, fill=as_rgba(fill),
                              outline=as_rgba(outline) if outline else None)
             else:
-                draw.line(pts, fill=as_rgba(fill or outline or "#FFFFFF"), width=width, joint="curve")
+                line_pts = list(pts)
+                if closed and line_pts:
+                    line_pts.append(line_pts[0])
+                draw.line(line_pts, fill=as_rgba(fill or outline or "#FFFFFF"),
+                          width=width, joint="curve")
     elif kind == "text":
         _draw_text(img, el)
     elif kind == "image":
@@ -898,7 +939,14 @@ def _svg_matrix(value: str) -> tuple[float, float, float, float, float, float]:
 
 
 def _svg_fill(style: dict[str, str], fallback: str = "#000000") -> str | None:
-    fill = style.get("fill", fallback)
+    fill = style.get("fill")
+    if fill is None:
+        # Если задан только stroke, это контурная графика: не заливаем
+        # чёрным по умолчанию, иначе птицы и линии превращаются в кляксы.
+        stroke = style.get("stroke")
+        if stroke and stroke.lower() != "none":
+            return None
+        fill = fallback
     if not fill or fill.lower() in ("none", "transparent", "url(#none)"):
         return None
     if fill.startswith("url("):

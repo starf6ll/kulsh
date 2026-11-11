@@ -316,7 +316,6 @@ AUTO_ORDER_FREE: list[str] = [
     "kimi-k3",
     "claude-haiku-5-5",
     "gpt-6.1-terra",
-    "gpt-6.1-sol",
     "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
@@ -328,6 +327,7 @@ AUTO_ORDER_FREE: list[str] = [
 ]
 
 AUTO_ORDER_PAID: list[str] = [
+    "gpt-6.1-sol",
     "kimi-k3.1-pro",
     "grok-4.7",
     "qwen3.8-max-0902",
@@ -365,6 +365,7 @@ MODEL_DISPLAY: dict[str, str] = {
 }
 
 MODEL_PRICING: dict[str, dict[str, float]] = {
+    "gpt-6.1-sol": {"input": 0.2, "output": 1.0, "cache_read": 0.02, "cache_write": 0.0},
     "kimi-k3.1-pro": {"input": 0.16, "output": 0.8, "cache_read": 0.014, "cache_write": 0.0},
     "gpt-6-astra": {"input": 0.34, "output": 1.7, "cache_read": 0.034, "cache_write": 0.0},
     "grok-4.7": {"input": 0.2, "output": 1.0, "cache_read": 0.02, "cache_write": 0.0},

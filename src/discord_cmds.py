@@ -527,7 +527,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     if mres.png is not None:
                         draw_png = mres.png
                         draw_before = _manual_note(
-                            image_before, "Kulsh Paint 1.1", mres.before
+                            image_before, "Kulsh Paint 1.2", mres.before
                         )
                         draw_after = mres.after
                     else:

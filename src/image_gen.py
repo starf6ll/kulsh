@@ -23,7 +23,9 @@ from src.util import (
     msk_now,
 )
 
-IMAGE_DAILY_LIMIT = 2
+IMAGE_WEEKLY_LIMIT = 4
+# Оставлено для совместимости со старыми импортами.
+IMAGE_DAILY_LIMIT = IMAGE_WEEKLY_LIMIT
 IMAGE_API_BASE = "https://api.etage.one/v1"
 IMAGE_MODEL = "gpt-image-2.5-flare"
 IMAGE_MODEL_CHOICES = ("auto", "flare", "sunburst", "paint")
@@ -32,25 +34,25 @@ IMAGE_MODEL_LABELS = {
         "auto": "🎲 Авто",
         "flare": "GPT Image 2.5 Flare",
         "sunburst": "GPT Image 2.5 Sunburst",
-        "paint": "Kulsh Paint 1.1",
+        "paint": "Kulsh Paint 1.2",
     },
     "en": {
         "auto": "🎲 Auto",
         "flare": "GPT Image 2.5 Flare",
         "sunburst": "GPT Image 2.5 Sunburst",
-        "paint": "Kulsh Paint 1.1",
+        "paint": "Kulsh Paint 1.2",
     },
 }
 IMAGE_MODEL_HINTS = {
     "ru": {
-        "auto": "Flare, пока есть бесплатные; потом Paint",
-        "flare": "2 бесплатных в день, затем 3 ₽",
+        "auto": "Flare: 4 бесплатных в неделю, потом Paint или 3 ₽",
+        "flare": "4 бесплатных в неделю, затем 3 ₽",
         "sunburst": "4 ₽ за картинку",
         "paint": "бесплатно, рисует текстовая модель",
     },
     "en": {
-        "auto": "Flare while free, then Paint",
-        "flare": "2 free per day, then 3 ₽",
+        "auto": "Flare: 4 free weekly, then Paint or 3 ₽",
+        "flare": "4 free per week, then 3 ₽",
         "sunburst": "4 ₽ per image",
         "paint": "free, drawn by a text model",
     },
@@ -133,8 +135,9 @@ def _save_usage() -> None:
         logger.warning(f"image_usage save: {e}")
 
 
-def _today() -> str:
-    return msk_now().strftime("%Y-%m-%d")
+def _week_key() -> str:
+    # ISO-неделя: понедельник — первый день, номер недели зависит от года.
+    return msk_now().strftime("%G-W%V")
 
 
 def _usage_key(platform: str, user_id: int) -> str:
@@ -145,7 +148,7 @@ def image_used(platform: str, user_id: int) -> int:
     if not user_id:
         return 0
     entry = _image_usage.get(_usage_key(platform, user_id))
-    if not entry or entry.get("date") != _today():
+    if not entry or entry.get("week") != _week_key():
         return 0
     try:
         return max(0, int(entry.get("used", 0)))
@@ -154,7 +157,7 @@ def image_used(platform: str, user_id: int) -> int:
 
 
 def image_remaining(platform: str, user_id: int) -> int:
-    return max(0, IMAGE_DAILY_LIMIT - image_used(platform, user_id))
+    return max(0, IMAGE_WEEKLY_LIMIT - image_used(platform, user_id))
 
 
 def consume_image(platform: str, user_id: int) -> bool:
@@ -163,9 +166,9 @@ def consume_image(platform: str, user_id: int) -> bool:
         return True
     key = _usage_key(platform, user_id)
     used = image_used(platform, user_id)
-    if used >= IMAGE_DAILY_LIMIT:
+    if used >= IMAGE_WEEKLY_LIMIT:
         return False
-    _image_usage[key] = {"date": _today(), "used": used + 1}
+    _image_usage[key] = {"week": _week_key(), "used": used + 1}
     _save_usage()
     return True
 

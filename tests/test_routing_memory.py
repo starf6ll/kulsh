@@ -47,6 +47,11 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0], "gpt-6-luna")
         self.assertFalse(any(ai.is_paid_model(m) for m in result))
 
+    async def test_sol_is_never_in_free_pool(self):
+        with patch.object(ai, "_jev_complexity", AsyncMock(return_value="easy")):
+            result = await ai._pick_auto_models(False, "привет", False, "tg", 1, "default")
+        self.assertNotIn("gpt-6.1-sol", result)
+
     async def test_hard_vision_and_paid_constraints(self):
         with patch.object(ai, "_jev_complexity", AsyncMock(return_value="hard")):
             result = await ai._pick_auto_models(True, "сложная задача", False, "tg", 1, "default")
@@ -222,7 +227,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(image_model_label("auto", "en"), "🎲 Auto")
         self.assertEqual(image_model_label("flare", "ru"), "GPT Image 2.5 Flare")
         self.assertEqual(image_model_label("sunburst", "ru"), "GPT Image 2.5 Sunburst")
-        self.assertEqual(image_model_label("paint", "ru"), "Kulsh Paint 1.1")
+        self.assertEqual(image_model_label("paint", "ru"), "Kulsh Paint 1.2")
 
     def test_group_toggles_have_expected_defaults(self):
         from src import agent
@@ -277,6 +282,77 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([entry["id"] for entry in found], [-100])
         finally:
             chats._chats = old_chats
+
+    def test_gpt_sol_is_paid_like_grok(self):
+        from src import util
+        self.assertTrue(util.is_paid_model("gpt-6.1-sol"))
+        self.assertEqual(util.MODEL_PRICING["gpt-6.1-sol"]["input"],
+                         util.MODEL_PRICING["grok-4.7"]["input"])
+        self.assertEqual(util.MODEL_PRICING["gpt-6.1-sol"]["output"],
+                         util.MODEL_PRICING["grok-4.7"]["output"])
+
+    def test_flare_weekly_limit_is_four(self):
+        from datetime import datetime
+        from src import image_gen
+        old_usage = image_gen._image_usage
+        image_gen._image_usage = {}
+        try:
+            with patch.object(image_gen, "msk_now", return_value=datetime(2026, 11, 9, 12)), \
+                    patch.object(image_gen, "_save_usage"):
+                for _ in range(3):
+                    self.assertTrue(image_gen.consume_image("tg", 777001))
+                self.assertEqual(image_gen.image_remaining("tg", 777001), 1)
+                self.assertTrue(image_gen.consume_image("tg", 777001))
+                self.assertFalse(image_gen.consume_image("tg", 777001))
+            with patch.object(image_gen, "msk_now", return_value=datetime(2026, 11, 16, 12)), \
+                    patch.object(image_gen, "_save_usage"):
+                self.assertEqual(image_gen.image_remaining("tg", 777001), 4)
+        finally:
+            image_gen._image_usage = old_usage
+
+    def test_compact_prompt_for_short_chat(self):
+        from src import ai
+        self.assertTrue(ai._is_compact_chat("че делаешь", None, "default", None, None))
+        self.assertFalse(ai._is_compact_chat("нарисуй мопса", None, "default", None, None))
+        full = ai.build_system_prompt("tg", -100, 0)
+        compact = ai.build_system_prompt("tg", -100, 0, compact=True)
+        self.assertLess(len(compact), len(full) - 3000)
+        self.assertIn(ai.STYLE_REFERENCE[:40], compact)
+        self.assertNotIn("УТИЛИТЫ.", compact)
+
+    def test_compact_prompt_detects_short_history_message(self):
+        from src import ai
+        messages = [{"role": "user",
+                     "text": "[20:00] [tg] Фолз (@lolfall, id:1, msg_id:2): че"}]
+        self.assertTrue(ai._is_compact_chat(None, messages, "default", None, None))
+        self.assertTrue(ai._is_compact_chat(None, messages, "observer", None, None))
+
+    async def test_paint_retries_sparse_canvas(self):
+        from src import ai
+        sparse = ('{"width":800,"height":600,"background":"#000000","elements":'
+                  '[{"type":"rect","x":0,"y":0,"w":20,"h":20,"fill":"#ffffff"}]}')
+        rects = ",".join(
+            f'{{"type":"rect","x":{i * 30},"y":{i * 20},"w":20,"h":20,"fill":"#ffffff"}}'
+            for i in range(20)
+        )
+        rich = f'{{"width":800,"height":600,"background":"#000000","elements":[{rects}]}}'
+        with patch.object(ai, "ask_ai_async", AsyncMock(side_effect=[sparse, rich])) as call:
+            result = await ai.ask_paint("мопс", "tg", 1, 2)
+        self.assertEqual(call.await_count, 2)
+        self.assertIn("!draw", result)
+
+    def test_svg_does_not_connect_separate_subpaths(self):
+        from PIL import Image
+        from src import draw
+        spec = {
+            "width": 120, "height": 40, "background": "#ffffff",
+            "elements": [{"type": "svg", "d": "M10 20 L40 20 M80 20 L110 20",
+                          "outline": "#000000", "width": 4}],
+        }
+        img = Image.open(draw.render_spec(spec)).convert("RGB")
+        self.assertEqual(img.getpixel((60, 20)), (255, 255, 255))
+        self.assertNotEqual(img.getpixel((25, 20)), (255, 255, 255))
+        self.assertNotEqual(img.getpixel((95, 20)), (255, 255, 255))
 
     async def test_process_drawing_accepts_native_svg(self):
         from src import draw
