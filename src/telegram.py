@@ -108,6 +108,7 @@ from src.util import (
     strip_chat_punctuation,
     tr,
     tg_msg,
+    wants_drawing,
     add_bot_memory,
     add_donation,
     chat_media_history,
@@ -1554,12 +1555,14 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
                 try:
                     from src.ai import ask_paint
                     manual_raw = await ask_paint(orig_user_text or str(image_spec.get("prompt", "")),
-                                                 "tg", chat_id, user_id)
+                                                 "tg", chat_id, user_id,
+                                                 reference_image=(user_images[0] if user_images else None))
                     mres = await process_drawing(manual_raw or "")
                     if mres.png is not None:
                         draw_png = mres.png
                         draw_before = _manual_note(
-                            image_before, "Kulsh Paint 1.2", mres.before
+                            image_before, "рисую вручную" if lang == "ru" else "drawing by hand",
+                            mres.before
                         )
                         draw_after = mres.after
                     else:
@@ -1572,13 +1575,62 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
                 res = await process_drawing(answer_raw or "")
                 if res.png is None:
                     from src.ai import ask_paint
-                    paint_raw = await ask_paint(orig_user_text or "нарисуй картинку", "tg", chat_id, user_id)
+                    paint_raw = await ask_paint(orig_user_text or "нарисуй картинку", "tg", chat_id, user_id,
+                                                reference_image=(user_images[0] if user_images else None))
                     res = await process_drawing(paint_raw)
                 draw_png, draw_before, draw_after = res.png, res.before, res.after
                 if res.status:
                     logger.info(f"🎨 draw terminal: {res.status}")
             except Exception as e:
                 logger.error(f"tg draw: {e}")
+
+    # Если пользователь прямо просит нарисовать/перерисовать, а модель просто
+    # ответила текстом (или описала картинку), рисуем принудительно. Иначе
+    # получается «сейчас нарисую» без картинки и без маркера.
+    recent_draws = recent_generated_images(f"tg_{chat_id}", 1)
+    if (cfg.get("drawing_enabled", True) and draw_png is None
+            and wants_drawing(orig_user_text, has_draw_context=bool(user_images) or bool(recent_draws))):
+        reference = user_images[0] if user_images else (recent_draws[0] if recent_draws else None)
+        if reference is None:
+            try:
+                last_bytes, last_kind, _ = await _media().fetch_last_media_tg(chat_id)
+                if last_bytes and last_kind in ("photo", "video", "animation"):
+                    reference = last_bytes
+            except Exception as e:
+                logger.warning(f"tg forced draw ref: {e}")
+        try:
+            from src.ai import ask_paint
+            from src.image_gen import generate_for_user, image_can_generate
+
+            image_choice = cfg.get("image_model", "auto")
+            png_bytes = None
+            if image_choice != "paint" and image_can_generate("tg", user_id, image_choice):
+                spec = {"prompt": orig_user_text or "красивая картинка", "size": "1024x1024"}
+                try:
+                    png_bytes = await generate_for_user(
+                        "tg", user_id, image_choice, spec, [reference] if reference else None,
+                    )
+                except Exception as e:
+                    logger.warning(f"tg forced image: {e}")
+            if png_bytes:
+                draw_png = BytesIO(png_bytes)
+                draw_generated = True
+                draw_before, draw_after = "", ""
+                answer_raw = ""
+            else:
+                paint_raw = await ask_paint(
+                    orig_user_text or "нарисуй картинку", "tg", chat_id, user_id,
+                    reference_image=reference,
+                )
+                res = await process_drawing(paint_raw)
+                if res.png is not None:
+                    draw_png = res.png
+                    draw_before, draw_after = res.before, res.after
+                    answer_raw = ""
+        except Exception as e:
+            logger.error(f"tg forced draw: {e}")
+        if draw_png is not None:
+            logger.info(f"🎨 принудительный рисунок tg:{chat_id}")
 
     clean_segments, markers = process_ai_response(
         draw_before if draw_png is not None else answer_raw,

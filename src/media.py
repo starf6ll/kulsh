@@ -194,6 +194,7 @@ from src.util import (
     note_chat_participant,
     user_femboy_state,
     user_looksmaxxing_state,
+    wants_drawing,
 
     DONATE_URL,
     LOG_INTRO,
@@ -704,15 +705,54 @@ async def handle_tg_text(message: types.Message) -> None:
             text_for_memory = f"{text} [отвечает на msg_id:{parent_media_id} (медиа)]"
         add_user_memory(chat_key, "TG", display_name, username, user_id, text_for_memory,
                         message_id=message.message_id)
+
+        # Если пользователь отвечает на фото/видео или просит перерисовать —
+        # даём модели сам референс, а не только подпись «[медиа]». Иначе она
+        # честно отвечает, что картинки не видит, и просит прислать описание.
+        ref_bytes: bytes | None = None
+        ref_kind = ""
+        parent = message.reply_to_message
+        if parent is not None:
+            try:
+                if parent.photo:
+                    ref_bytes = await get_tg_file_bytes(_tg().tg_bot, parent.photo[-1].file_id)
+                    ref_kind = "photo"
+                elif parent.animation:
+                    vid = await get_tg_file_bytes(_tg().tg_bot, parent.animation.file_id)
+                    ref_bytes = await extract_video_frame(vid, ".mp4")
+                    ref_kind = "animation"
+                elif parent.video:
+                    vid = await get_tg_file_bytes(_tg().tg_bot, parent.video.file_id)
+                    ref_bytes = await extract_video_frame(vid, ".mp4")
+                    ref_kind = "video"
+                elif parent.document and parent.document.mime_type \
+                        and parent.document.mime_type.startswith("image/"):
+                    ref_bytes = await get_tg_file_bytes(_tg().tg_bot, parent.document.file_id)
+                    ref_kind = "photo"
+            except Exception as e:
+                logger.warning(f"reply media download: {e}")
+            if ref_bytes is None and parent_media_id is not None:
+                ref_bytes, ref_kind = await fetch_media_by_id_tg(chat_id, parent_media_id)
+        if ref_bytes is None and wants_drawing(text):
+            try:
+                ref_bytes, ref_kind, _ = await fetch_last_media_tg(chat_id)
+            except Exception as e:
+                logger.warning(f"last media for draw: {e}")
+
         messages = memory_to_messages(get_chat_memory(chat_key))
         typing_task = asyncio.create_task(_typing_until_cancelled(chat_id))
         try:
-            answer = await ask_ai_async(messages=messages, chat_id=chat_id, user_id=user_id, platform="tg")
+            answer = await ask_ai_async(messages=messages, image_bytes=ref_bytes,
+                                        image_mime="image/jpeg", chat_id=chat_id,
+                                        user_id=user_id, platform="tg")
         finally:
             typing_task.cancel()
             with suppress(asyncio.CancelledError):
                 await typing_task
-        await _tg().send_tg_ai_response(message, chat_id, user_id, answer, user_text=text)
+        await _tg().send_tg_ai_response(
+            message, chat_id, user_id, answer, user_text=text,
+            user_images=[ref_bytes] if ref_bytes else None,
+        )
         asyncio.create_task(extract_memory(chat_key, f"{display_name}: {text}", answer,
                                            platform="tg", user_id=user_id, source_chat_id=chat_id))
         return

@@ -327,6 +327,52 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ai._is_compact_chat(None, messages, "default", None, None))
         self.assertTrue(ai._is_compact_chat(None, messages, "observer", None, None))
 
+    def test_separator_splits_glued_capitalized_text(self):
+        from src import util
+        self.assertEqual(
+            util.split_by_separator("ща перерисую!separateKulsh Paint 1.2"),
+            ["ща перерисую", "Kulsh Paint 1.2"],
+        )
+        self.assertEqual(
+            util.split_by_separator("one!separateTwo"),
+            ["one", "Two"],
+        )
+        self.assertEqual(util.split_by_separator("this is separately fine"),
+                         ["this is separately fine"])
+
+    def test_wants_drawing_only_on_explicit_request(self):
+        from src import util
+        self.assertTrue(util.wants_drawing("перерисуй эту картинку"))
+        self.assertTrue(util.wants_drawing("нарисуй мопса"))
+        self.assertFalse(util.wants_drawing("давай по новой"))
+        self.assertTrue(util.wants_drawing("давай по новой", has_draw_context=True))
+        self.assertFalse(util.wants_drawing("ты рисуешь?", has_draw_context=True))
+
+    def test_compact_prompt_disabled_after_drawing(self):
+        from src import ai
+        messages = [
+            {"role": "user", "text": "[20:00] [tg] Фолз (@lolfall, id:1, msg_id:2): перерисуй"},
+            {"role": "model", "text": "[нарисовал картинку] моаи"},
+            {"role": "user", "text": "[20:01] [tg] Фолз (@lolfall, id:1, msg_id:3): давай по новой"},
+        ]
+        self.assertFalse(ai._is_compact_chat(None, messages, "default", None, None))
+
+    async def test_paint_passes_reference_image(self):
+        from src import ai
+        colors = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff", "#00ffff"]
+        circles = ",".join(
+            f'{{"type":"circle","x":{i * 15},"y":{i * 12},"x2":{i * 15 + 30},'
+            f'"y2":{i * 12 + 30},"fill":"{colors[i % len(colors)]}"}}'
+            for i in range(30)
+        )
+        good = f'{{"width":800,"height":600,"background":"#ffffff","elements":[{circles}]}}'
+        reference = b"\x89PNG\r\n\x1a\nfake"
+        with patch.object(ai, "ask_ai_async", AsyncMock(return_value=good)) as call:
+            result = await ai.ask_paint("перерисуй это", "tg", 1, 2, reference_image=reference)
+        self.assertEqual(call.await_count, 1)
+        self.assertIs(call.await_args.kwargs.get("image_bytes"), reference)
+        self.assertIn("!draw", result)
+
     async def test_paint_retries_sparse_canvas(self):
         from src import ai
         sparse = ('{"width":800,"height":600,"background":"#000000","elements":'

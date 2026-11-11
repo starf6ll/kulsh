@@ -1095,7 +1095,10 @@ STRAY_EXTRA_PATTERNS = (
     re.compile(r'!\s*term\b[^\n]*', re.IGNORECASE),
 )
 SEPARATOR_PATTERN = re.compile(
-    r'!+\s*sep(?:[ae]rate)?(?![A-Za-z])',
+    # После "separate" может сразу идти текст с заглавной буквы
+    # ("!separateKulsh Paint"), это не должно ломать разбивку. Запрещаем
+    # только строчные латинские буквы, чтобы не съесть слово "separately".
+    r'!+\s*sep(?:[ae]rate)?(?!(?-i:[a-z]))',
     re.IGNORECASE,
 )
 # Голый маркер без "!" (модель иногда забывает восклицательный знак).
@@ -1104,7 +1107,7 @@ SEPARATOR_PATTERN = re.compile(
 # к тексту/пунктуации с обеих сторон без пробелов.
 BARE_SEPARATOR_PATTERN = re.compile(
     r'(?:^[ \t]*(?:sep|separate)[ \t]*[.!]?[ \t]*$'
-    r'|(?<=[^\sA-Za-z0-9])(?:sep|separate)(?=[^\sA-Za-z0-9]))',
+    r'|(?<=[^\sA-Za-z0-9])(?:sep|separate)(?!(?-i:[a-z])))',
     re.IGNORECASE | re.MULTILINE,
 )
 SEPARATOR_ANY_PATTERN = re.compile(
@@ -1145,6 +1148,27 @@ def split_by_separator(text: str) -> list[str]:
         return []
     parts = SEPARATOR_ANY_PATTERN.split(text)
     return [p.strip() for p in parts if p and p.strip()]
+
+
+DRAW_INTENT_PATTERN = re.compile(
+    r'(?i)(?:перерис|нарис|рисуй|изобраз|draw|redraw|sketch|наброс)',
+)
+REDO_INTENT_PATTERN = re.compile(
+    r'(?i)(?:по\s+новой|заново|с\s+нуля|ещ[её]\s+раз|снова|again|redo|another\s+(?:try|one))',
+)
+
+
+def wants_drawing(text: str, has_draw_context: bool = False) -> bool:
+    """Явно ли пользователь просит нарисовать/перерисовать.
+
+    «давай по новой» само по себе неоднозначно, поэтому считается запросом
+    на рисунок только если в недавнем контексте уже была картинка.
+    """
+    if not text:
+        return False
+    if DRAW_INTENT_PATTERN.search(text):
+        return True
+    return bool(has_draw_context and REDO_INTENT_PATTERN.search(text))
 
 
 _TELL_START = re.compile(r'!tell\b', re.IGNORECASE)

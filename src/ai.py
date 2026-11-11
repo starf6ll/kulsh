@@ -226,6 +226,23 @@ def _last_message_plain(messages: list[dict[str, Any]] | None) -> str:
     return text
 
 
+def _has_recent_media_context(messages: list[dict[str, Any]] | None) -> bool:
+    """Была ли в недавней истории картинка/рисунок.
+
+    Тогда «давай по новой» или «перерисуй» означают именно рисование, а не
+    болтовню, и компактный промпт без описания инструментов уже не подходит.
+    """
+    if not messages:
+        return False
+    markers = ("[с медиа:", "[фото", "[медиа", "[видео", "[гиф", "[нарисовал картинку]",
+               "kulsh paint", "!draw", "!image")
+    for msg in messages[-6:]:
+        text = str(msg.get("text") or "").casefold()
+        if any(marker in text for marker in markers):
+            return True
+    return False
+
+
 def _is_compact_chat(prompt: str | None, messages: list[dict[str, Any]] | None,
                      context_type: str | None, image_bytes: bytes | None,
                      image_bytes_list: list[bytes] | None) -> bool:
@@ -241,15 +258,18 @@ def _is_compact_chat(prompt: str | None, messages: list[dict[str, Any]] | None,
         return False
     if image_bytes or image_bytes_list:
         return False
+    if _has_recent_media_context(messages):
+        return False
     text = (prompt or "").strip() or _last_message_plain(messages)
     if not text or "!" in text:
         return False
     low = text.casefold()
     tool_words = (
-        "нарису", "картин", "фото", "изображ", "draw", "image", "поиск", "найди",
-        "search", "стикер", "гиф", "переведи", "скачай", "tell", "напиши",
-        "код", "svg", "chart", "график", "аватар", "юзеринфо", "group_info",
-        "передай", "сообщи", "напомни", "позови", "упомяни",
+        "нарису", "перерису", "рису", "картин", "фото", "изображ", "draw", "image",
+        "поиск", "найди", "search", "стикер", "гиф", "переведи", "скачай", "tell",
+        "напиши", "код", "svg", "chart", "график", "аватар", "юзеринфо", "group_info",
+        "передай", "сообщи", "напомни", "позови", "упомяни", "recall", "вспомни",
+        "по новой", "заново", "снова",
     )
     return not any(word in low for word in tool_words)
 
@@ -529,8 +549,10 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int,
     if compact:
         parts.append(
             "МАРКЕРЫ (используй только по делу, пользователю они не видны): !separate — разбить на сообщения; "
-            "!react:<эмодзи> — реакция; !image — сгенерировать картинку; !draw — нарисовать вручную; "
-            "!search <запрос> — свежий факт; !reply:ID — ответить на сообщение; !tell — написать в другой чат.\n\n"
+            "!react:<эмодзи> — реакция; !image — сгенерировать или перерисовать картинку; !draw — нарисовать "
+            "вручную; !recall_media[:ID] — взять последнее/указанное медиа из чата; !search <запрос> — свежий факт; "
+            "!reply:ID — ответить на сообщение; !tell — написать в другой чат. Если просят нарисовать или "
+            "перерисовать — обязательно рисуй через !image/!draw, а не описывай картинку словами.\n\n"
         )
     else:
         parts.append("".join(util_lines))
@@ -1439,8 +1461,14 @@ async def extract_memory(chat_id: str, user_message: str, bot_answer: str,
         logger.error(f"extract_memory: {e}")
 
 
-async def ask_paint(prompt: str, platform: str, chat_id: int, user_id: int) -> str:
-    """Generate a drawing with Kulsh Paint 1.2, allowing JSON or native SVG."""
+async def ask_paint(prompt: str, platform: str, chat_id: int, user_id: int,
+                    reference_image: bytes | None = None) -> str:
+    """Generate a drawing with Kulsh Paint 1.2, allowing JSON or native SVG.
+
+    reference_image — исходное фото, если пользователь просит перерисовать его.
+    Модель получает картинку и должна повторить композицию, а не выдумывать
+    описание по памяти.
+    """
     instruction = (
         "Ты Kulsh Paint 1.2, художник. Верни только готовый рисунок одним из двух форматов, "
         "без markdown, комментариев, префиксов, команд и пояснений. "
@@ -1455,12 +1483,52 @@ async def ask_paint(prompt: str, platform: str, chat_id: int, user_id: int) -> s
         "Минимум 25 элементов (JSON) или 25 фигур (SVG), лучше 40-80. Строй слоями: фон, дальний план, "
         "средний план, передний план, детали, тени и блики. Добавляй окружение: небо, облака, воду, траву, "
         "стены, отражения, блики, мелкие предметы — в зависимости от сцены. "
+        "ФОН НЕ ДОЛЖЕН БЫТЬ ЧЁРНЫМ ИЛИ ПОЧТИ ЧЁРНЫМ, если сцена не ночная: иначе рисунок выглядит как "
+        "чёрный квадрат. Используй светлый или цветной фон и контрастные к нему фигуры. "
         "Каждый объект рисуй отдельным элементом/подпутём. НИКОГДА не соединяй разных животных, птиц, "
         "людей или предметы одной линией или одним path: у каждой птицы должен быть свой отдельный path, "
         "у каждого животного — своя фигура. Несколько subpath в одном path допустимы только для частей "
         "одного объекта (например, контур крыла и хвоста одной птицы). "
         "Соблюдай пропорции, перспективу и единую палитру. Никаких внешних ссылок и растровых картинок."
     )
+    if reference_image:
+        instruction += (
+            " ТЕБЕ ДАЛИ ФОТО-РЕФЕРЕНС. Перерисуй именно то, что на нём: сохрани главный объект, его "
+            "позу, ракурс, пропорции и окружение. Не придумывай другой сюжет и не описывай фото словами — "
+            "верни готовый рисунок."
+        )
+
+    def _paint_metrics(payload: str) -> tuple[int, float, float]:
+        """(число элементов, средняя яркость, контраст) для отбраковки пустоты."""
+        count = 0
+        mean = 255.0
+        spread = 255.0
+        try:
+            from PIL import Image
+            from src.draw import render_spec, svg_to_spec
+
+            text = payload or ""
+            if text.lstrip().startswith("<svg") or "<svg" in text.lower():
+                match = re.search(r"<svg\b[\s\S]*?</svg>", text, re.IGNORECASE)
+                spec = svg_to_spec(match.group(0)) if match else None
+            else:
+                cleaned = clean_json_text(text)
+                match = re.search(r'\{[\s\S]*\}', cleaned)
+                spec = json.loads(match.group(0)) if match else None
+            if not isinstance(spec, dict):
+                return 0, mean, spread
+            elements = spec.get("elements")
+            count = len(elements) if isinstance(elements, list) else 0
+            if not count:
+                return 0, mean, spread
+            img = Image.open(render_spec(spec)).convert("L").resize((64, 64))
+            getter = getattr(img, "get_flattened_data", None)
+            pixels = list(getter() if getter else img.getdata())
+            mean = sum(pixels) / len(pixels)
+            spread = (sum((p - mean) ** 2 for p in pixels) / len(pixels)) ** 0.5
+        except Exception as exc:
+            logger.debug(f"paint metrics: {exc}")
+        return count, mean, spread
 
     def parse_paint(raw: str) -> tuple[str, int]:
         text = raw or ""
@@ -1469,15 +1537,7 @@ async def ask_paint(prompt: str, platform: str, chat_id: int, user_id: int) -> s
             if not match:
                 return "", 0
             svg = match.group(0)
-            count = 0
-            try:
-                from src.draw import svg_to_spec
-                spec = svg_to_spec(svg)
-                if isinstance(spec, dict):
-                    elements = spec.get("elements")
-                    count = len(elements) if isinstance(elements, list) else 0
-            except Exception:
-                count = 0
+            count = _paint_metrics(svg)[0]
             return svg, count
         cleaned = clean_json_text(text)
         try:
@@ -1497,11 +1557,23 @@ async def ask_paint(prompt: str, platform: str, chat_id: int, user_id: int) -> s
         spec["elements"] = elements
         return "!draw\n```json\n" + json.dumps(spec, ensure_ascii=False) + "\n```", len(elements)
 
+    def is_acceptable(payload: str) -> bool:
+        count, mean, spread = _paint_metrics(payload)
+        if count < 18:
+            return False
+        # Совсем чёрный или однотонный холст — это не рисунок.
+        if mean < 22 or spread < 8:
+            return False
+        return True
+
+    reference_mime = "image/png" if (reference_image or b"").startswith(b"\x89PNG") else "image/jpeg"
     request_text = prompt[:4000]
     best: tuple[str, int] | None = None
     for attempt in range(2):
         raw = await ask_ai_async(
             prompt=request_text,
+            image_bytes=reference_image,
+            image_mime=reference_mime,
             system_instruction_override=instruction,
             model_override="gpt-6.1-terra",
             no_fallback=True,
@@ -1510,14 +1582,15 @@ async def ask_paint(prompt: str, platform: str, chat_id: int, user_id: int) -> s
         result = parse_paint(raw or "")
         if result[0] and (best is None or result[1] > best[1]):
             best = result
-        if result[0] and result[1] >= 18:
+        if result[0] and is_acceptable(result[0]):
             return result[0]
         if attempt == 0:
             request_text = (
                 prompt[:2500]
-                + "\n\nПредыдущая попытка вышла слишком пустой. Перерисуй подробнее: минимум 25 элементов, "
-                  "заполненный фон, окружение, тени и мелкие детали. Каждую птицу, животное и предмет "
-                  "рисуй отдельным элементом, не соединяй их одной линией."
+                + "\n\nПредыдущая попытка вышла пустой или почти чёрной. Перерисуй подробнее: минимум "
+                  "25 элементов, светлый или цветной фон, окружение, тени и мелкие детали. Каждую птицу, "
+                  "животное и предмет рисуй отдельным элементом, не соединяй их одной линией."
+                + (" Сохрани сюжет и композицию с фото-референса." if reference_image else "")
             )
     if best and best[0]:
         return best[0]

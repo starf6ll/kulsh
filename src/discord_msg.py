@@ -67,6 +67,7 @@ from src.util import (
     sr,
     voice_recv,
     voice_text_channels,
+    wants_drawing,
 
     AUTHORIZED_UPDATERS,
     DONATE_URL,
@@ -602,10 +603,31 @@ async def on_message(message: discord.Message) -> None:
         async with message.channel.typing():
             add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                             message.content, message_id=message.id)
+            # Если отвечают на картинку или просят перерисовать — передаём
+            # референс модели, чтобы она видела фото, а не только текст.
+            ref_bytes: bytes | None = None
+            parent = message.reference.resolved if message.reference else None
+            if isinstance(parent, discord.Message):
+                for att in parent.attachments:
+                    if att.content_type and att.content_type.startswith("image/"):
+                        try:
+                            ref_bytes = await download_image_bytes(att.url)
+                        except Exception as e:
+                            logger.warning(f"ds reply media: {e}")
+                        break
+            if ref_bytes is None and wants_drawing(message.content):
+                try:
+                    from src.discord_cmds import fetch_last_media_ds
+                    ref_bytes, _kind, _mid = await fetch_last_media_ds(chat_id)
+                except Exception as e:
+                    logger.warning(f"ds last media for draw: {e}")
             messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
-            answer = await ask_ai_async(messages=messages, chat_id=chat_id,
-                                        user_id=user_id, platform="ds")
-        await send_ds_ai_response(message, chat_id, user_id, answer, user_text=message.content)
+            answer = await ask_ai_async(messages=messages, image_bytes=ref_bytes,
+                                        chat_id=chat_id, user_id=user_id, platform="ds")
+        await send_ds_ai_response(
+            message, chat_id, user_id, answer, user_text=message.content,
+            user_images=[ref_bytes] if ref_bytes else None,
+        )
         asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: {message.content}", answer,
                                            platform="ds", user_id=user_id, source_chat_id=chat_id))
         return
