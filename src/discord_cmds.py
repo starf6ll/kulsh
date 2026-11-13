@@ -8,6 +8,7 @@ import asyncio
 from io import BytesIO
 import io
 import json
+import os
 import random
 import re
 from typing import Any
@@ -79,6 +80,7 @@ from src.util import (
     add_bot_memory,
     as_member,
     calc_typing_delay,
+    chunk_text,
     chat_media_history,
     clean_extra_text,
     clean_json_text,
@@ -448,7 +450,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="ds")
 
     # ---- файловые действия ----
-    ws_reports: list[str] = []
+    ws_reports: list[tuple[str, str]] = []
     answer_raw, ws_actions = workspace.extract_actions(answer_raw or "")
     if ws_actions:
         for ws_action in ws_actions:
@@ -456,25 +458,38 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                 continue
             report = await workspace.execute_action("ds", chat_id, ws_action)
             if report:
-                ws_reports.append(report)
-        if ws_reports:
-            results = "\n\n".join(ws_reports)[:9000]
-            answer_raw = await ask_ai_async(
-                prompt=(f"Пользователь написал: {orig_user_text or 'работа с файлами'}\n\n"
-                        f"Результаты действий в рабочей папке:\n{results}\n\n"
-                        f"Ответь по-человечески и по делу, в своём стиле."),
-                chat_id=chat_id, user_id=user_id, platform="ds",
-            )
-        for ws_action in ws_actions:
-            if ws_action.kind != "send":
+                ws_reports.append((ws_action.kind, report))
+        # Без второго запроса к ИИ: результат и так понятен.
+        send_targets = [a.payload.strip() for a in ws_actions if a.kind == "send"]
+        if not send_targets and any(a.kind == "pack" for a in ws_actions):
+            send_targets = [""]  # !pack без !send — отправляем архив
+        for target in send_targets:
+            if not target:
+                target = workspace.latest_archive("ds", chat_id) or workspace.latest_file("ds", chat_id) or ""
+            if target.lower().endswith(".zip") and not os.path.isfile(
+                    workspace.safe_path("ds", chat_id, target) or ""):
+                target = workspace.latest_archive("ds", chat_id) or target
+            if not target:
+                ws_reports.append(("send", "нечего отправлять: в рабочей папке пусто"))
                 continue
             try:
-                data = workspace.as_bytes("ds", chat_id, ws_action.payload.strip())
-                await message.reply(file=discord.File(
-                    fp=io.BytesIO(data), filename=ws_action.payload.strip().split("/")[-1],
+                try:
+                    data = workspace.as_bytes("ds", chat_id, target)
+                except FileNotFoundError:
+                    if not await workspace.recover_file("ds", chat_id, target):
+                        raise
+                    data = workspace.as_bytes("ds", chat_id, target)
+                sent = await message.reply(file=discord.File(
+                    fp=io.BytesIO(data), filename=os.path.basename(target),
                 ))
+                for att in getattr(sent, "attachments", []) or []:
+                    workspace.register_file(
+                        "ds", chat_id, target, url=att.url, message_id=sent.id,
+                        mime=getattr(att, "content_type", "") or "", kind="generated",
+                    )
             except Exception as e:
                 logger.warning(f"ds workspace send: {e}")
+                ws_reports.append(("send", f"не смог отправить {target}: {e}"))
 
     # ---- search ----
     if cfg.get("web_search_enabled", True):
@@ -835,6 +850,11 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             logger.warning(f"DS user_info ai: {e}")
 
     all_segments = clean_segments + extra_segments + agent_reports
+    # Результаты файловых действий показываем сами, без второго запроса к ИИ.
+    for rep_kind, rep_text in ws_reports:
+        if rep_kind in ("write", "append", "replace", "pack", "unpack") and (answer_raw or "").strip():
+            continue
+        all_segments.extend(t for t in chunk_text(rep_text, 1800) if t.strip())
     if draw_png is None and not all_segments:
         # Страховка: если в ответе был осмысленный текст, но он схлопнулся в ноль —
         # отправляем его как есть, чтобы ответ не пропал молча.

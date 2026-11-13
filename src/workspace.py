@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shutil
@@ -26,8 +27,15 @@ from src.util import DATA_DIR, logger
 WORKSPACE_ROOT = os.path.join(DATA_DIR, "workspace")
 MAX_WORKSPACE_FILES = 200
 MAX_WORKSPACE_BYTES = 32 * 1024 * 1024
-MAX_READ_CHARS = 12000
+MAX_READ_CHARS = 4000
 WORKSPACE_TTL_SECONDS = 7 * 24 * 3600
+# Медиа и присланные файлы живут на сервере недолго: их всегда можно заново
+# скачать из Telegram по file_id. Сгенерированные файлы без копии в чате
+# живут чуть дольше, чтобы модель успела их доработать.
+MEDIA_TTL_SECONDS = 60
+UPLOAD_TTL_SECONDS = 60
+GENERATED_TTL_SECONDS = 600
+INDEX_NAME = ".index.json"
 
 _EXT_BY_MIME = {
     "image/jpeg": ".jpg",
@@ -52,6 +60,226 @@ def workspace_dir(platform: str, chat_id: int) -> str:
     path = os.path.join(WORKSPACE_ROOT, _chat_key(platform, chat_id))
     os.makedirs(path, exist_ok=True)
     return path
+
+
+# ============================================================
+# ИНДЕКС ФАЙЛОВ (чтобы брать их заново из Telegram)
+# ============================================================
+def _load_index(base: str) -> dict[str, Any]:
+    path = os.path.join(base, INDEX_NAME)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("files"), dict):
+            return data
+    except (OSError, ValueError):
+        pass
+    return {"files": {}}
+
+
+def _save_index(base: str, data: dict[str, Any]) -> None:
+    path = os.path.join(base, INDEX_NAME)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as exc:
+        logger.debug(f"workspace index save: {exc}")
+
+
+def register_file(platform: str, chat_id: int, rel: str, *,
+                  file_id: str = "", message_id: int | None = None,
+                  mime: str = "", url: str = "", kind: str = "upload") -> None:
+    """Запоминает file_id/url файла, чтобы потом скачать его из чата."""
+    base = workspace_dir(platform, chat_id)
+    key = (rel or "").replace("\\", "/")
+    data = _load_index(base)
+    files = data.get("files")
+    if not isinstance(files, dict):
+        files = {}
+        data["files"] = files
+    entry = files.get(key) if isinstance(files.get(key), dict) else {}
+    now = time.time()
+    entry.update({
+        "name": key,
+        "kind": kind,
+        "mime": mime or entry.get("mime", ""),
+        "saved": entry.get("saved", now),
+        "used": now,
+        "removed": False,
+    })
+    if file_id:
+        entry["file_id"] = file_id
+    if message_id:
+        entry["message_id"] = int(message_id)
+    if url:
+        entry["url"] = url
+    files[key] = entry
+    _save_index(base, data)
+
+
+def mark_used(platform: str, chat_id: int, rel: str) -> None:
+    base = workspace_dir(platform, chat_id)
+    key = (rel or "").replace("\\", "/")
+    data = _load_index(base)
+    files = data.get("files")
+    if not isinstance(files, dict):
+        return
+    entry = files.get(key)
+    if isinstance(entry, dict):
+        entry["used"] = time.time()
+        _save_index(base, data)
+
+
+def _entry_ttl(entry: dict[str, Any]) -> int:
+    kind = str(entry.get("kind") or "")
+    if kind in ("upload", "media") or entry.get("file_id") or entry.get("url"):
+        return MEDIA_TTL_SECONDS if kind == "media" else UPLOAD_TTL_SECONDS
+    return GENERATED_TTL_SECONDS
+
+
+def cleanup_expired(platform: str, chat_id: int) -> int:
+    """Удаляет файлы, которые давно не использовали. Индекс остаётся."""
+    return _cleanup_dir(workspace_dir(platform, chat_id))
+
+
+def cleanup_all() -> int:
+    removed = 0
+    try:
+        for name in os.listdir(WORKSPACE_ROOT):
+            path = os.path.join(WORKSPACE_ROOT, name)
+            if os.path.isdir(path):
+                removed += _cleanup_dir(path)
+    except OSError:
+        pass
+    return removed
+
+
+def _cleanup_dir(base: str) -> int:
+    data = _load_index(base)
+    files = data.get("files")
+    if not isinstance(files, dict):
+        return 0
+    now = time.time()
+    removed = 0
+    for root, _dirs, names in os.walk(base):
+        for name in names:
+            if name == INDEX_NAME or name.startswith(INDEX_NAME):
+                continue
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, base).replace("\\", "/")
+            entry = files.get(rel) if isinstance(files.get(rel), dict) else {}
+            try:
+                used = float(entry.get("used") or os.path.getmtime(full))
+            except (OSError, TypeError, ValueError):
+                used = now
+            if now - used <= _entry_ttl(entry):
+                continue
+            try:
+                os.remove(full)
+                removed += 1
+                if entry:
+                    entry["removed"] = True
+                    entry["removed_at"] = now
+            except OSError:
+                continue
+    # Старые записи индекса тоже не храним вечно.
+    for key in list(files):
+        entry = files.get(key)
+        if not isinstance(entry, dict):
+            del files[key]
+            continue
+        try:
+            saved = float(entry.get("saved") or now)
+        except (TypeError, ValueError):
+            saved = now
+        if now - saved > WORKSPACE_TTL_SECONDS:
+            del files[key]
+    _save_index(base, data)
+    return removed
+
+
+async def cleanup_loop(interval: int = 20) -> None:
+    """Фоновая автоочистка: не держим картинки и файлы на сервере вечно."""
+    while True:
+        try:
+            removed = cleanup_all()
+            if removed:
+                logger.info(f"🧹 workspace: удалено {removed} файлов")
+        except Exception as exc:
+            logger.debug(f"workspace cleanup: {exc}")
+        await asyncio.sleep(interval)
+
+
+async def recover_file(platform: str, chat_id: int, rel: str) -> bool:
+    """Возвращает файл в workspace, заново скачав его из чата."""
+    base = workspace_dir(platform, chat_id)
+    key = (rel or "").replace("\\", "/")
+    data = _load_index(base)
+    files = data.get("files")
+    entry = files.get(key) if isinstance(files, dict) and isinstance(files.get(key), dict) else None
+    if not entry:
+        return False
+    raw: bytes | None = None
+    try:
+        if platform == "tg" and entry.get("file_id"):
+            from src.telegram import tg_bot
+            from src.util import get_tg_file_bytes
+            raw = await get_tg_file_bytes(tg_bot, str(entry["file_id"]))
+        elif entry.get("url"):
+            from src.util import download_image_bytes
+            raw = await download_image_bytes(str(entry["url"]))
+    except Exception as exc:
+        logger.warning(f"workspace recover {key}: {exc}")
+    if not raw:
+        return False
+    full = safe_path(platform, chat_id, key)
+    if full is None:
+        return False
+    try:
+        os.makedirs(os.path.dirname(full) or base, exist_ok=True)
+        with open(full, "wb") as f:
+            f.write(raw)
+        mark_used(platform, chat_id, key)
+        return True
+    except OSError as exc:
+        logger.warning(f"workspace recover write {key}: {exc}")
+        return False
+
+
+def latest_archive(platform: str, chat_id: int) -> str | None:
+    base = workspace_dir(platform, chat_id)
+    best: tuple[float, str] | None = None
+    for root, _dirs, names in os.walk(base):
+        for name in names:
+            if not name.lower().endswith(".zip"):
+                continue
+            full = os.path.join(root, name)
+            try:
+                mtime = os.path.getmtime(full)
+            except OSError:
+                continue
+            if best is None or mtime > best[0]:
+                best = (mtime, os.path.relpath(full, base).replace("\\", "/"))
+    return best[1] if best else None
+
+
+def latest_file(platform: str, chat_id: int) -> str | None:
+    base = workspace_dir(platform, chat_id)
+    best: tuple[float, str] | None = None
+    for root, _dirs, names in os.walk(base):
+        for name in names:
+            if name == INDEX_NAME or name.startswith(INDEX_NAME):
+                continue
+            full = os.path.join(root, name)
+            try:
+                mtime = os.path.getmtime(full)
+            except OSError:
+                continue
+            if best is None or mtime > best[0]:
+                best = (mtime, os.path.relpath(full, base).replace("\\", "/"))
+    return best[1] if best else None
 
 
 def safe_path(platform: str, chat_id: int, rel: str | None) -> str | None:
@@ -99,12 +327,17 @@ def save_bytes(platform: str, chat_id: int, filename: str, data: bytes) -> str:
 
 
 def save_upload(platform: str, chat_id: int, filename: str, data: bytes,
-                mime: str = "") -> str:
-    """Как save_bytes, но подставляет расширение по mime, если его нет."""
+                mime: str = "", *, file_id: str = "", message_id: int | None = None,
+                url: str = "") -> str:
+    """Как save_bytes, но подставляет расширение по mime и запоминает file_id."""
     name = sanitize_name(filename)
     if "." not in name:
         name += _EXT_BY_MIME.get((mime or "").lower(), ".bin")
-    return save_bytes(platform, chat_id, name, data)
+    rel = save_bytes(platform, chat_id, name, data)
+    kind = "media" if (mime or "").lower().startswith(("image/", "video/")) else "upload"
+    register_file(platform, chat_id, rel, file_id=file_id, message_id=message_id,
+                  mime=mime, url=url, kind=kind)
+    return rel
 
 
 def list_files(platform: str, chat_id: int) -> list[str]:
@@ -112,7 +345,9 @@ def list_files(platform: str, chat_id: int) -> list[str]:
     out: list[str] = []
     for root, _dirs, files in os.walk(base):
         for name in files:
-            out.append(os.path.relpath(os.path.join(root, name), base))
+            if name == INDEX_NAME or name.startswith(INDEX_NAME):
+                continue
+            out.append(os.path.relpath(os.path.join(root, name), base).replace("\\", "/"))
     out.sort()
     return out[:MAX_WORKSPACE_FILES]
 
@@ -135,6 +370,7 @@ def read_text(platform: str, chat_id: int, rel: str,
     full = safe_path(platform, chat_id, rel)
     if full is None or not os.path.isfile(full):
         raise FileNotFoundError(f"нет такого файла: {rel}")
+    mark_used(platform, chat_id, rel)
     with open(full, "rb") as f:
         raw = f.read(2 * 1024 * 1024)
     if b"\x00" in raw[:1024]:
@@ -155,11 +391,15 @@ def write_text(platform: str, chat_id: int, rel: str, content: str,
     full = safe_path(platform, chat_id, rel)
     if full is None:
         raise ValueError("путь вне рабочей папки")
+    if len(content) > 2 * 1024 * 1024:
+        raise ValueError("файл слишком большой (максимум 2 МБ)")
     os.makedirs(os.path.dirname(full) or workspace_dir(platform, chat_id), exist_ok=True)
     mode = "a" if append else "w"
     with open(full, mode, encoding="utf-8", newline="\n") as f:
         f.write(content)
-    return os.path.relpath(full, workspace_dir(platform, chat_id))
+    saved = os.path.relpath(full, workspace_dir(platform, chat_id)).replace("\\", "/")
+    register_file(platform, chat_id, saved, kind="generated")
+    return saved
 
 
 def replace_in_file(platform: str, chat_id: int, rel: str, old: str, new: str) -> int:
@@ -195,15 +435,33 @@ def make_archive(platform: str, chat_id: int, rel: str = "",
     if target is None or not os.path.exists(target):
         raise FileNotFoundError(f"нет такого пути: {rel or '.'}")
     out = unique_path(base, sanitize_name(archive_name))
+    out_real = os.path.realpath(out)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         if os.path.isdir(target):
             for root, _dirs, files in os.walk(target):
                 for name in files:
+                    if name == INDEX_NAME or name.startswith(INDEX_NAME):
+                        continue
                     full = os.path.join(root, name)
+                    if os.path.realpath(full) == out_real:
+                        continue
                     zf.write(full, os.path.relpath(full, target))
         else:
             zf.write(target, os.path.basename(target))
-    return os.path.relpath(out, base)
+    saved = os.path.relpath(out, base).replace("\\", "/")
+    register_file(platform, chat_id, saved, kind="generated")
+    return saved
+
+
+def _safe_member_name(name: str) -> str:
+    """Безопасный относительный путь внутри архива (без .. и абсолютных путей)."""
+    parts: list[str] = []
+    for part in (name or "").replace("\\", "/").split("/"):
+        clean = sanitize_name(part)
+        if not clean or clean in (".", ".."):
+            continue
+        parts.append(clean)
+    return os.path.join(*parts) if parts else ""
 
 
 def _safe_extract_zip(path: str, dest: str) -> list[str]:
@@ -216,7 +474,9 @@ def _safe_extract_zip(path: str, dest: str) -> list[str]:
             total += info.file_size
             if total > MAX_WORKSPACE_BYTES:
                 raise ValueError("архив слишком большой")
-            name = sanitize_name(info.filename)
+            name = _safe_member_name(info.filename)
+            if not name:
+                continue
             target = os.path.join(dest, name)
             os.makedirs(os.path.dirname(target) or dest, exist_ok=True)
             with zf.open(info) as src, open(target, "wb") as dst:
@@ -235,7 +495,9 @@ def _safe_extract_tar(path: str, dest: str) -> list[str]:
             total += member.size
             if total > MAX_WORKSPACE_BYTES:
                 raise ValueError("архив слишком большой")
-            name = sanitize_name(member.name)
+            name = _safe_member_name(member.name)
+            if not name:
+                continue
             target = os.path.join(dest, name)
             os.makedirs(os.path.dirname(target) or dest, exist_ok=True)
             src = tf.extractfile(member)
@@ -297,19 +559,33 @@ def cleanup_old() -> None:
 
 
 def describe(platform: str, chat_id: int) -> str:
+    base = workspace_dir(platform, chat_id)
     files = list_files(platform, chat_id)
-    if not files:
+    data = _load_index(base)
+    known = data.get("files") if isinstance(data.get("files"), dict) else {}
+    missing = [
+        name for name, entry in (known or {}).items()
+        if isinstance(entry, dict) and name not in files
+        and (entry.get("file_id") or entry.get("url"))
+    ]
+    if not files and not missing:
         return "рабочая папка пуста"
-    shown = ", ".join(files[:40])
-    if len(files) > 40:
-        shown += f" ... (+{len(files) - 40})"
-    return shown
+    lines: list[str] = []
+    shown = files[:40]
+    if shown:
+        lines.append("на сервере: " + ", ".join(shown))
+        if len(files) > 40:
+            lines.append(f"... (+{len(files) - 40})")
+    if missing:
+        lines.append("в чате (верну через !recall_file): " + ", ".join(missing[:20]))
+    return "\n".join(lines)
 
 
 def as_bytes(platform: str, chat_id: int, rel: str) -> bytes:
     full = safe_path(platform, chat_id, rel)
     if full is None or not os.path.isfile(full):
         raise FileNotFoundError(f"нет такого файла: {rel}")
+    mark_used(platform, chat_id, rel)
     with open(full, "rb") as f:
         return f.read()
 
@@ -331,21 +607,22 @@ def file_info(platform: str, chat_id: int, rel: str) -> dict[str, Any]:
 # ============================================================
 # FILE ACTIONS FROM MODEL MARKERS
 # ============================================================
-_READ_RE = re.compile(r'!\s*(?:read|cat)\s+([^\n]+?)\s*$', re.IGNORECASE | re.MULTILINE)
+_READ_RE = re.compile(r'!\s*(?:read|cat)[ \t]+([^\n]+?)[ \t]*$', re.IGNORECASE | re.MULTILINE)
 _WRITE_RE = re.compile(
-    r'!\s*(write|append)\s+([^\n]+?)\s*\n```[a-zA-Z0-9]*\s*\n([\s\S]*?)```',
+    r'!\s*(write|append)\s+([^\n`]+?)\s*```[a-zA-Z0-9]*[ \t]*\n([\s\S]*?)```',
     re.IGNORECASE,
 )
 _REPLACE_RE = re.compile(
-    r'!\s*replace\s+([^\n:]+?)\s*::\s*([\s\S]*?)\s*::\s*([^\n]*)',
+    r'!\s*replace[ \t]+([^\n:]+?)[ \t]*::[ \t]*([\s\S]*?)[ \t]*::[ \t]*([^\n]*)',
     re.IGNORECASE,
 )
-_SEND_RE = re.compile(r'!\s*send(?:file)?\s+([^\n]+?)\s*$', re.IGNORECASE | re.MULTILINE)
-_UNPACK_RE = re.compile(r'!\s*unpack\s+([^\n]+?)\s*$', re.IGNORECASE | re.MULTILINE)
-_PACK_RE = re.compile(r'!\s*pack(?:\s+([^\n]+?))?\s*$', re.IGNORECASE | re.MULTILINE)
-_RUN_RE = re.compile(r'!\s*run\s+([^\n]+?)\s*$', re.IGNORECASE | re.MULTILINE)
+_SEND_RE = re.compile(r'!\s*send(?:file)?(?:[ \t]+([^\n]+?))?[ \t]*$', re.IGNORECASE | re.MULTILINE)
+_RECALL_FILE_RE = re.compile(r'!\s*recall[\s_]*file[ \t]+([^\n]+?)[ \t]*$', re.IGNORECASE | re.MULTILINE)
+_UNPACK_RE = re.compile(r'!\s*unpack[ \t]+([^\n]+?)[ \t]*$', re.IGNORECASE | re.MULTILINE)
+_PACK_RE = re.compile(r'!\s*pack(?:[ \t]+([^\n]+?))?[ \t]*$', re.IGNORECASE | re.MULTILINE)
+_RUN_RE = re.compile(r'!\s*run[ \t]+([^\n]+?)[ \t]*$', re.IGNORECASE | re.MULTILINE)
 _FILES_RE = re.compile(r'!\s*(?:files|ls|workspace)\b', re.IGNORECASE)
-_SAVE_RE = re.compile(r'!\s*save\s+([^\n]+?)\s*$', re.IGNORECASE | re.MULTILINE)
+_SAVE_RE = re.compile(r'!\s*save[ \t]+([^\n]+?)[ \t]*$', re.IGNORECASE | re.MULTILINE)
 
 
 class WorkspaceAction:
@@ -372,6 +649,39 @@ def extract_actions(text: str) -> tuple[str, list[WorkspaceAction]]:
         actions.append(WorkspaceAction(match.group(1).lower(), f"{match.group(2).strip()}\x1f{match.group(3)}"))
     out = _WRITE_RE.sub("", out)
 
+    # Если модель написала !write путь без ```-блока — берём всё до следующего
+    # маркера. Иначе .py/.json/.md терялись и уходили обычным сообщением.
+    lines = out.splitlines()
+    kept: list[str] = []
+    i = 0
+    while i < len(lines):
+        bare = re.match(r'^\s*!\s*(write|append)\s+(\S+)\s*$', lines[i], re.IGNORECASE)
+        if not bare:
+            kept.append(lines[i])
+            i += 1
+            continue
+        j = i + 1
+        body: list[str] = []
+        while j < len(lines) and not re.match(r'^\s*!\s*[A-Za-z_]', lines[j]):
+            body.append(lines[j])
+            j += 1
+        # Если блок кода не поймался основным regex — снимаем ```-обёртку,
+        # чтобы в файл не попали сами backticks.
+        if body and body[0].strip().startswith("```"):
+            body = body[1:]
+            if body and body[-1].strip().startswith("```"):
+                body = body[:-1]
+        content = "\n".join(body).strip("\n")
+        if content.strip():
+            actions.append(WorkspaceAction(
+                bare.group(1).lower(), f"{bare.group(2).strip()}\x1f{content}"
+            ))
+            i = j
+            continue
+        kept.append(lines[i])
+        i += 1
+    out = "\n".join(kept)
+
     for match in list(_REPLACE_RE.finditer(out)):
         actions.append(WorkspaceAction(
             "replace",
@@ -392,8 +702,12 @@ def extract_actions(text: str) -> tuple[str, list[WorkspaceAction]]:
     out = _PACK_RE.sub("", out)
 
     for match in list(_SEND_RE.finditer(out)):
-        actions.append(WorkspaceAction("send", match.group(1).strip()))
+        actions.append(WorkspaceAction("send", (match.group(1) or "").strip()))
     out = _SEND_RE.sub("", out)
+
+    for match in list(_RECALL_FILE_RE.finditer(out)):
+        actions.append(WorkspaceAction("recall", match.group(1).strip()))
+    out = _RECALL_FILE_RE.sub("", out)
 
     for match in list(_SAVE_RE.finditer(out)):
         actions.append(WorkspaceAction("save", match.group(1).strip()))
@@ -425,7 +739,12 @@ async def execute_action(platform: str, chat_id: int, action: WorkspaceAction) -
                     start, end = int(m.group(1)), int(m.group(2))
                 elif rng.strip().isdigit():
                     start = int(rng.strip())
-            text = read_text(platform, chat_id, rel, start, end)
+            try:
+                text = read_text(platform, chat_id, rel, start, end)
+            except FileNotFoundError:
+                if not await recover_file(platform, chat_id, rel):
+                    raise
+                text = read_text(platform, chat_id, rel, start, end)
             return f"=== {rel} ===\n{text}"
         if action.kind in ("write", "append"):
             rel, _, content = action.payload.partition("\x1f")
@@ -447,6 +766,14 @@ async def execute_action(platform: str, chat_id: int, action: WorkspaceAction) -
         if action.kind == "pack":
             path = make_archive(platform, chat_id, action.payload)
             return f"собрал архив {path}"
+        if action.kind == "recall":
+            rel = action.payload.strip()
+            if os.path.isfile(safe_path(platform, chat_id, rel) or ""):
+                mark_used(platform, chat_id, rel)
+                return f"файл {rel} на месте"
+            if await recover_file(platform, chat_id, rel):
+                return f"вернул {rel} из чата"
+            return f"не смог вернуть {rel}: в чате нет копии"
         if action.kind == "save":
             return f"файл {action.payload} в рабочей папке"
     except Exception as exc:

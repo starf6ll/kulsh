@@ -8,6 +8,7 @@ import asyncio
 from io import BytesIO
 from collections import deque
 import json
+import os
 import random
 import re
 import time
@@ -98,6 +99,7 @@ from src.util import (
     WHY_PATTERN,
     calc_typing_delay,
     cb_id,
+    chunk_text,
     clean_extra_text,
     clean_json_text,
     extract_reaction_and_why,
@@ -498,13 +500,21 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "separate":
-        cfg["separate_enabled"] = not cfg.get("separate_enabled", True)
+        new_val = not cfg.get("separate_enabled", True)
+        if new_val and cfg.get("streaming_enabled", False):
+            await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_mutex"), show_alert=False)
+            return
+        cfg["separate_enabled"] = new_val
         save_user_configs()
     elif action == "streaming":
         if not state.premium_functions_enabled:
             await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_premium_off"), show_alert=False)
             return
-        cfg["streaming_enabled"] = not cfg.get("streaming_enabled", False)
+        new_val = not cfg.get("streaming_enabled", False)
+        if new_val and cfg.get("separate_enabled", True):
+            await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_mutex"), show_alert=False)
+            return
+        cfg["streaming_enabled"] = new_val
         save_user_configs()
     elif action == "stickers":
         cfg["stickers_enabled"] = not cfg.get("stickers_enabled", True)
@@ -1314,7 +1324,7 @@ async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tru
 # Маркеры, которые не должны мелькать в предпросмотре стрима.
 _STREAM_HIDE_RE = re.compile(
     r'!\s*(?:separate|sep[ae]rate|react|why|reply|tell|notify(?:_owner)?|refuse|'
-    r'image|draw|term|chart|search|recall[\s_]*media|avatar|sticker|gif|'
+    r'image|draw|term|chart|search|recall[\s_]*(?:media|file)|avatar|sticker|gif|'
     r'group[\s_]*info|user[\s_]*info|read_page|page|site|files|ls|workspace|'
     r'read|cat|write|append|replace|send|sendfile|unpack|pack|run|save)'
     r'(?![A-Za-z])[^\n]*',
@@ -1472,8 +1482,9 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
     lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
     streaming = cfg.get("streaming_enabled", False) and state.premium_functions_enabled
-    if streaming and already_streamed:
-        streaming = False
+    # Если ответ уже показывали настоящим стримом, первый сегмент повторно не
+    # анимируем, а вот остальные разбитые сообщения — анимируем.
+    animate_from = 1 if already_streamed else 0
 
     orig_user_text = (user_text or (message.text or message.caption or "")).strip()
 
@@ -1617,7 +1628,7 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
     answer_raw, agent_actions = extract_agent_actions(answer_raw or "")
 
     # Файловые действия рабочей папки (!files, !read, !write, !send, !run...).
-    ws_reports: list[str] = []
+    ws_reports: list[tuple[str, str]] = []
     answer_raw, ws_actions = _workspace().extract_actions(answer_raw or "")
     if ws_actions:
         for ws_action in ws_actions:
@@ -1625,36 +1636,45 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
                 continue  # отправляем отдельно, после текста
             report = await _workspace().execute_action("tg", chat_id, ws_action)
             if report:
-                ws_reports.append(report)
-        if ws_reports:
-            results = "\n\n".join(ws_reports)[:9000]
-            follow_prompt = (
-                f"Пользователь написал: {orig_user_text or 'работа с файлами'}\n\n"
-                f"Ты выполнил действия в рабочей папке. Результаты:\n{results}\n\n"
-                f"Ответь пользователю по-человечески и по делу, в своём стиле. "
-                f"Не показывай служебные маркеры и не повторяй весь вывод дословно, если он длинный."
-            )
-            try:
-                answer_raw = await ask_ai_async(
-                    prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg",
-                )
-            except Exception as e:
-                logger.warning(f"workspace followup: {e}")
-                answer_raw = results
-        for ws_action in ws_actions:
-            if ws_action.kind != "send":
+                ws_reports.append((ws_action.kind, report))
+        # Никакого второго запроса к ИИ: результат и так понятен. Это и было
+        # причиной минутных задержек при создании обычного файла.
+        send_targets = [a.payload.strip() for a in ws_actions if a.kind == "send"]
+        if not send_targets and any(a.kind == "pack" for a in ws_actions):
+            send_targets = [""]  # !pack без !send — отправляем собранный архив
+        for target in send_targets:
+            if not target:
+                target = _workspace().latest_archive("tg", chat_id) or _workspace().latest_file("tg", chat_id) or ""
+            # Модель часто угадывает имя архива неточно — берём последний собранный.
+            if target.lower().endswith(".zip") and not os.path.isfile(
+                    _workspace().safe_path("tg", chat_id, target) or ""):
+                target = _workspace().latest_archive("tg", chat_id) or target
+            if not target:
+                ws_reports.append(("send", "нечего отправлять: в рабочей папке пусто"))
                 continue
             try:
-                data = _workspace().as_bytes("tg", chat_id, ws_action.payload.strip())
+                try:
+                    data = _workspace().as_bytes("tg", chat_id, target)
+                except FileNotFoundError:
+                    if not await _workspace().recover_file("tg", chat_id, target):
+                        raise
+                    data = _workspace().as_bytes("tg", chat_id, target)
                 from io import BytesIO as _BytesIO
-                await tg_bot.send_document(
-                    chat_id, InputFile(_BytesIO(data), file_name=ws_action.payload.strip().split("/")[-1]),
+                name = os.path.basename(target)
+                sent = await tg_bot.send_document(
+                    chat_id, InputFile(_BytesIO(data), file_name=name),
                     reply_to_message_id=message.message_id,
                 )
-                add_bot_memory(f"tg_{chat_id}", f"[отправил файл {ws_action.payload.strip()}]")
+                doc = getattr(sent, "document", None)
+                if doc is not None:
+                    _workspace().register_file(
+                        "tg", chat_id, target, file_id=doc.file_id,
+                        message_id=getattr(sent, "message_id", None),
+                        mime=getattr(doc, "mime_type", "") or "", kind="generated",
+                    )
             except Exception as e:
                 logger.warning(f"workspace send: {e}")
-                ws_reports.append(f"не смог отправить {ws_action.payload}: {e}")
+                ws_reports.append(("send", f"не смог отправить {target}: {e}"))
 
     draw_png = None
     draw_before = ""
@@ -1900,6 +1920,11 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
         markers.remove("recall_media")
 
     all_segments = clean_segments + extra_segments + agent_reports
+    # Результаты файловых действий показываем сами, без второго запроса к ИИ.
+    for rep_kind, rep_text in ws_reports:
+        if rep_kind in ("write", "append", "replace", "pack", "unpack") and (answer_raw or "").strip():
+            continue  # модель уже сказала "готово" — не дублируем
+        all_segments.extend(t for t in chunk_text(rep_text, 3500) if t.strip())
 
     if draw_png is None and not all_segments:
         fallback = scrub_stray_markers(answer_raw or "").strip()
@@ -1935,7 +1960,7 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
             await typing_with_delay_tg(message.chat.id, seg, delay=calc_typing_delay(seg, segment_index=idx))
         except Exception:
             pass
-        if streaming and idx == 0 and len(seg) > 60 and is_private_chat:
+        if streaming and idx >= animate_from and len(seg) > 25 and is_private_chat:
             try:
                 await stream_text_via_drafts(message.chat.id, seg, is_private=True)
             except Exception as e:

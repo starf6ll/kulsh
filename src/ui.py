@@ -295,16 +295,16 @@ def effort_text(platform: str, chat_id: int, user_id: int) -> str:
         "ru": {
             "low": "быстро и просто, минимум деталей",
             "medium": "обычный баланс скорости и качества",
-            "high": "подробнее, больше слоёв и теней",
-            "xhigh": "настоящий SVG с градиентами и мелкими деталями",
-            "max": "максимум слоёв, градиентов и элементов",
+            "high": "подробнее, больше деталей и проработки",
+            "xhigh": "высокая детализация",
+            "max": "максимальная детализация",
         },
         "en": {
             "low": "fast and simple, minimal detail",
             "medium": "balanced speed and quality",
-            "high": "more layers, shadows and detail",
-            "xhigh": "real SVG with gradients and fine detail",
-            "max": "maximum layers, gradients and elements",
+            "high": "more detail and polish",
+            "xhigh": "high detail",
+            "max": "maximum detail",
         },
     }.get(lang, {})
     lines = [f"# {tr(lang, 'cfg_effort')}", "", "---", ""]

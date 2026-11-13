@@ -834,6 +834,10 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
     cfg["communication_mode"] = DEFAULT_COMMUNICATION_MODE
     if str(cfg.get("draw_effort") or DEFAULT_DRAW_EFFORT) not in DRAW_EFFORTS:
         cfg["draw_effort"] = DEFAULT_DRAW_EFFORT
+    # Разбивка и стриминг взаимно исключаемы: стрим показывает один черновик,
+    # разбивка шлёт несколько сообщений. Держим только разбивку.
+    if cfg.get("separate_enabled", True) and cfg.get("streaming_enabled", False):
+        cfg["streaming_enabled"] = False
     return cfg
 
 
@@ -929,19 +933,27 @@ def add_user_memory(
     message_id: int | None = None,
 ) -> None:
     mem = get_chat_memory(chat_id)
+    body = text or ""
+    # Очень длинные вставки не должны раздувать контекст всех следующих запросов.
+    if len(body) > 4000:
+        body = body[:4000] + " …[обрезано]"
     mem.append({
         "type": "user", "time": msk_time_str(), "ts": time.time(), "platform": platform,
         "display": display_name or "Unknown", "username": username or "",
-        "id": str(user_id), "text": text or "",
+        "id": str(user_id), "text": body,
         "media": media or [], "message_id": message_id,
     })
 
 
 def add_bot_memory(chat_id: str, text: str, message_id: int | None = None) -> None:
     mem = get_chat_memory(chat_id)
+    body = text or ""
+    # Вывод файлов и длинные простыни храним коротко: в истории они не нужны целиком.
+    if len(body) > 800:
+        body = body[:800] + " …[обрезано]"
     mem.append({
         "type": "bot", "time": msk_time_str(), "ts": time.time(),
-        "text": text or "", "message_id": message_id,
+        "text": body, "message_id": message_id,
     })
 
 
@@ -1124,7 +1136,7 @@ STRAY_EXTRA_PATTERNS = (
     re.compile(r'!\s*term\b[^\n]*', re.IGNORECASE),
     re.compile(r'!\s*(?:read_page|page|site|читай)\b[^\n]*', re.IGNORECASE),
     re.compile(r'!\s*(?:files|ls|workspace)\b', re.IGNORECASE),
-    re.compile(r'!\s*(?:read|cat|write|append|replace|send|sendfile|unpack|pack|run|save)\b[^\n]*', re.IGNORECASE),
+    re.compile(r'!\s*(?:read|cat|write|append|replace|send|sendfile|unpack|pack|run|save|recall_file)\b[^\n]*', re.IGNORECASE),
 )
 SEPARATOR_PATTERN = re.compile(
     # После "separate" может сразу идти текст с заглавной буквы

@@ -1,5 +1,8 @@
 import unittest
 import tempfile
+import json
+import os
+import time
 from pathlib import Path
 from collections import deque
 from unittest.mock import AsyncMock, patch
@@ -85,7 +88,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             ai.long_term_memory.pop(key, None)
         system = captured[0]["content"]
         self.assertNotIn("СТАРОЕ РЕЗЮМЕ", system)  # автономный пост не тянет сводку
-        self.assertTrue(system.rstrip().endswith("не ставь."))
+        self.assertTrue(system.rstrip().endswith("с текста."))
         self.assertEqual(captured[-1]["role"], "user")
         self.assertIn("Ты молча наблюдаешь за чатом", captured[-1]["content"])
 
@@ -373,18 +376,14 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(call.await_args.kwargs.get("image_bytes"), reference)
         self.assertIn("!draw", result)
 
-    async def test_paint_retries_sparse_canvas(self):
+    async def test_paint_does_not_waste_extra_request(self):
         from src import ai
         sparse = ('{"width":800,"height":600,"background":"#000000","elements":'
                   '[{"type":"rect","x":0,"y":0,"w":20,"h":20,"fill":"#ffffff"}]}')
-        rects = ",".join(
-            f'{{"type":"rect","x":{i * 30},"y":{i * 20},"w":20,"h":20,"fill":"#ffffff"}}'
-            for i in range(20)
-        )
-        rich = f'{{"width":800,"height":600,"background":"#000000","elements":[{rects}]}}'
-        with patch.object(ai, "ask_ai_async", AsyncMock(side_effect=[sparse, rich])) as call:
+        with patch.object(ai, "ask_ai_async", AsyncMock(return_value=sparse)) as call:
             result = await ai.ask_paint("мопс", "tg", 1, 2)
-        self.assertEqual(call.await_count, 2)
+        # Одна генерация — один запрос, без дорогого второго прохода.
+        self.assertEqual(call.await_count, 1)
         self.assertIn("!draw", result)
 
     def test_svg_does_not_connect_separate_subpaths(self):
@@ -514,6 +513,69 @@ class NewFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("!separate", visible)
         self.assertNotIn("!draw", visible)
         self.assertNotIn("```", visible)
+
+    def test_effort_hints_are_universal(self):
+        from src import ui
+        text = ui.effort_text("tg", -903, 1).casefold()
+        self.assertNotIn("svg", text)
+        self.assertNotIn("градиент", text)
+        self.assertNotIn("вектор", text)
+        self.assertIn("детализац", text)
+
+    def test_streaming_and_split_are_exclusive(self):
+        from src import util
+        cfg = util.get_user_config("tg", -905, 1)
+        cfg["separate_enabled"] = True
+        cfg["streaming_enabled"] = True
+        self.assertFalse(util.get_user_config("tg", -905, 1)["streaming_enabled"])
+
+    def test_prompt_contains_effort_hint(self):
+        from src import ai, util
+        cfg = util.get_user_config("tg", -907, 1)
+        cfg["draw_effort"] = "max"
+        self.assertIn("40-65", ai.build_system_prompt("tg", -907, 1))
+        cfg["draw_effort"] = "low"
+        self.assertIn("5-10", ai.build_system_prompt("tg", -907, 1))
+
+    def test_workspace_writes_any_extension_and_expires_files(self):
+        from src import workspace
+        cleaned, actions = workspace.extract_actions(
+            "!write app.py\n```python\nprint('hi')\n```"
+        )
+        self.assertEqual(actions[0].kind, "write")
+        self.assertEqual(cleaned.strip(), "")
+        workspace.save_upload("tg", -904, "photo.jpg", b"\x89PNGdata", "image/jpeg",
+                              file_id="FILEID123", message_id=7)
+        base = workspace.workspace_dir("tg", -904)
+        workspace.cleanup_expired("tg", -904)
+        index_path = os.path.join(base, ".index.json")
+        with open(index_path, encoding="utf-8") as f:
+            data = json.load(f)
+        entry = data["files"]["photo.jpg"]
+        self.assertEqual(entry["file_id"], "FILEID123")
+        entry["used"] = time.time() - 9999
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        self.assertGreaterEqual(workspace.cleanup_expired("tg", -904), 1)
+        self.assertFalse(os.path.isfile(os.path.join(base, "photo.jpg")))
+
+    def test_send_without_path_is_allowed(self):
+        from src import workspace
+        _, actions = workspace.extract_actions("!pack\n!send")
+        kinds = [a.kind for a in actions]
+        self.assertIn("send", kinds)
+        self.assertEqual(actions[-1].payload, "")
+
+    async def test_workspace_recovers_file_from_chat(self):
+        from src import workspace
+        from src import util as util_mod
+        workspace.save_upload("ds", -906, "note.txt", b"old", "text/plain",
+                              url="https://cdn.example/note.txt")
+        base = workspace.workspace_dir("ds", -906)
+        os.remove(os.path.join(base, "note.txt"))
+        with patch.object(util_mod, "download_image_bytes", AsyncMock(return_value=b"fresh")):
+            self.assertTrue(await workspace.recover_file("ds", -906, "note.txt"))
+        self.assertEqual(workspace.as_bytes("ds", -906, "note.txt"), b"fresh")
 
 
 if __name__ == "__main__":

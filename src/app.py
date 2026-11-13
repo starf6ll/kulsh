@@ -283,6 +283,12 @@ async def main() -> None:
     else:
         logger.warning("⚠️ periodic_config_save_loop отсутствует — настройки НЕ будут сохраняться автоматически")
 
+    try:
+        from src import workspace as workspace_mod
+        asyncio.create_task(workspace_mod.cleanup_loop())
+    except Exception as e:
+        logger.warning(f"workspace cleanup init: {e}")
+
     @ds_bot.event
     async def on_ready() -> None:
         logger.info(f"Discord {ds_bot.user} запущен, discord.py {discord.__version__}")

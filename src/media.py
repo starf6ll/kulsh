@@ -434,11 +434,13 @@ async def handle_tg_media(message: types.Message) -> None:
                 raw_upload = await get_tg_file_bytes(_tg().tg_bot, message.document.file_id)
             if raw_upload and message.document:
                 ws.save_upload("tg", chat_id, file_name or "file", raw_upload,
-                               message.document.mime_type or "")
+                               message.document.mime_type or "",
+                               file_id=message.document.file_id,
+                               message_id=message.message_id)
             elif raw_upload:
                 ws.save_upload("tg", chat_id, f"{media_type}_{message.message_id}",
-                               raw_upload, "image/jpeg")
-            add_bot_memory(chat_key, f"[в рабочую папку сохранён {media_type}: {file_name or media_tag}]")
+                               raw_upload, "image/jpeg", file_id=file_id,
+                               message_id=message.message_id)
         except Exception as e:
             logger.warning(f"workspace save media: {e}")
 

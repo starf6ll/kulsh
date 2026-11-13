@@ -572,10 +572,17 @@ async def on_message(message: discord.Message) -> None:
             try:
                 media_list: list[bytes] = []
                 mime_list: list[str] = []
+                from src import workspace
                 for att in image_attachments[:6]:
                     try:
-                        media_list.append(await download_image_bytes(att.url))
+                        raw = await download_image_bytes(att.url)
+                        media_list.append(raw)
                         mime_list.append(att.content_type or "image/jpeg")
+                        workspace.save_upload(
+                            "ds", chat_id, att.filename or "image", raw,
+                            att.content_type or "", url=att.url,
+                            message_id=message.id,
+                        )
                     except Exception as exc:
                         logger.warning(f"DS attach download: {exc}")
                 if not media_list and video_attachments:
@@ -590,18 +597,13 @@ async def on_message(message: discord.Message) -> None:
                         sticker_bytes = await download_image_bytes(sticker_url)
                         media_list.append(sticker_bytes)
                         mime_list.append("image/png")
+                        workspace.save_upload("ds", chat_id,
+                                              f"sticker_{message.id}.png", sticker_bytes,
+                                              "image/png", url=sticker_url,
+                                              message_id=message.id)
                     except Exception as exc:
                         logger.warning(f"DS sticker: {exc}")
                 prompt = message.content.strip() or ""
-                # Все файлы сообщения — в рабочую папку канала.
-                from src import workspace
-                for att in image_attachments[:6]:
-                    try:
-                        raw = await download_image_bytes(att.url)
-                        workspace.save_upload("ds", chat_id, att.filename or "image", raw,
-                                              att.content_type or "")
-                    except Exception as exc:
-                        logger.warning(f"DS workspace save: {exc}")
                 add_user_memory(
                     f"ds_{chat_id}", "DS", display_name, username, user_id,
                     f"{prompt or '[медиа без подписи]'} [с медиа]",
