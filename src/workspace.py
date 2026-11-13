@@ -730,8 +730,13 @@ async def execute_action(platform: str, chat_id: int, action: WorkspaceAction) -
         if action.kind == "list":
             return describe(platform, chat_id)
         if action.kind == "read":
-            raw = action.payload
-            rel, _, rng = raw.partition(" ")
+            raw = action.payload.strip()
+            rel, rng = raw, ""
+            direct = safe_path(platform, chat_id, raw)
+            if not (direct and os.path.isfile(direct)):
+                rel, _, rng = raw.rpartition(" ")
+                if not rel:
+                    rel, rng = raw, ""
             start = end = None
             if rng:
                 m = re.match(r'(\d+)\s*[-:]\s*(\d+)', rng.strip())
@@ -739,6 +744,9 @@ async def execute_action(platform: str, chat_id: int, action: WorkspaceAction) -
                     start, end = int(m.group(1)), int(m.group(2))
                 elif rng.strip().isdigit():
                     start = int(rng.strip())
+                else:
+                    # это не диапазон, а часть имени файла с пробелом
+                    rel, rng = raw, ""
             try:
                 text = read_text(platform, chat_id, rel, start, end)
             except FileNotFoundError:
