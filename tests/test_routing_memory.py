@@ -67,7 +67,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         }
         captured = []
 
-        async def fake_chat(provider, url, api_key, model_name, messages, temp):
+        async def fake_chat(provider, url, api_key, model_name, messages, temp, on_delta=None):
             captured.extend(messages)
             return "тихо тут", None
 
@@ -227,7 +227,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(image_model_label("auto", "en"), "🎲 Auto")
         self.assertEqual(image_model_label("flare", "ru"), "GPT Image 2.5 Flare")
         self.assertEqual(image_model_label("sunburst", "ru"), "GPT Image 2.5 Sunburst")
-        self.assertEqual(image_model_label("paint", "ru"), "Kulsh Paint 1.2")
+        self.assertEqual(image_model_label("paint", "ru"), "Kulsh (SVG)")
 
     def test_group_toggles_have_expected_defaults(self):
         from src import agent
@@ -444,6 +444,76 @@ class ImageBillingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 await image_gen.generate_for_user("tg", 555002, "sunburst", {"prompt": "x"})
             self.assertEqual(refund.call_args.args[2], 4)
+
+
+class NewFeatureTests(unittest.IsolatedAsyncioTestCase):
+    def test_effort_setting_and_labels(self):
+        from src import util
+        self.assertIn("xhigh", util.DRAW_EFFORTS)
+        self.assertEqual(util.draw_effort_label("max", "ru"), "Макс")
+        cfg = util.get_user_config("tg", -555, 1)
+        self.assertEqual(cfg.get("draw_effort"), "medium")
+        cfg["draw_effort"] = "max"
+        self.assertEqual(cfg.get("draw_effort"), "max")
+
+    def test_modes_are_gone(self):
+        from src import util, ui
+        cfg = util.get_user_config("tg", -600, 1)
+        cfg["communication_mode"] = "assistant"
+        self.assertEqual(util.get_user_config("tg", -600, 1).get("communication_mode"), "kent")
+        text = ui.config_text("tg", -600, 1)
+        self.assertNotIn("Режим", text)
+        self.assertIn("Усилие", text)
+
+    def test_svg_linear_gradient_is_rendered(self):
+        from PIL import Image
+        from src import draw
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50">'
+            '<defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">'
+            '<stop offset="0" stop-color="#ff0000"/>'
+            '<stop offset="1" stop-color="#0000ff"/>'
+            '</linearGradient></defs>'
+            '<rect x="0" y="0" width="100" height="50" fill="url(#g1)"/></svg>'
+        )
+        spec = draw.svg_to_spec(svg)
+        self.assertIsNotNone(spec)
+        img = Image.open(draw.render_spec(spec)).convert("RGB")
+        left = img.getpixel((5, 25))
+        right = img.getpixel((95, 25))
+        self.assertGreater(left[0], left[2])
+        self.assertGreater(right[2], right[0])
+
+    async def test_workspace_file_actions(self):
+        from src import workspace
+        workspace.write_text("tg", -777, "notes/test.txt", "line1\nline2\nline3")
+        self.assertIn("line2", workspace.read_text("tg", -777, "notes/test.txt", 2, 2))
+        cleaned, actions = workspace.extract_actions(
+            "готово\n!files\n!read notes/test.txt 1-2\n!send notes/test.txt"
+        )
+        kinds = [a.kind for a in actions]
+        self.assertEqual(kinds, ["send", "read", "list"])
+        self.assertNotIn("!files", cleaned)
+        archive = workspace.make_archive("tg", -777, "notes", "notes.zip")
+        files = workspace.unpack_archive("tg", -777, archive)
+        self.assertTrue(any("test.txt" in f for f in files))
+
+    def test_page_marker_and_url_detection(self):
+        from src import ai
+        urls, cleaned = ai.extract_page_marker("!read_page https://example.com/a https://example.com/b")
+        self.assertEqual(urls, ["https://example.com/a", "https://example.com/b"])
+        self.assertEqual(cleaned, "")
+        self.assertTrue(ai.wants_page_read("прочитай что там по ссылке"))
+        self.assertFalse(ai.wants_page_read("просто скинь ссылку"))
+        self.assertEqual(ai.extract_urls("смотри https://x.dev/page?q=1)."),
+                         ["https://x.dev/page?q=1"])
+
+    def test_stream_preview_hides_markers(self):
+        from src import telegram
+        visible = telegram._stream_visible("ща нарисую!separateвот\n!draw\n```json\n{}")
+        self.assertNotIn("!separate", visible)
+        self.assertNotIn("!draw", visible)
+        self.assertNotIn("```", visible)
 
 
 if __name__ == "__main__":

@@ -34,28 +34,37 @@ IMAGE_MODEL_LABELS = {
         "auto": "🎲 Авто",
         "flare": "GPT Image 2.5 Flare",
         "sunburst": "GPT Image 2.5 Sunburst",
-        "paint": "Kulsh Paint 1.2",
+        "paint": "Kulsh (SVG)",
     },
     "en": {
         "auto": "🎲 Auto",
         "flare": "GPT Image 2.5 Flare",
         "sunburst": "GPT Image 2.5 Sunburst",
-        "paint": "Kulsh Paint 1.2",
+        "paint": "Kulsh (SVG)",
     },
 }
 IMAGE_MODEL_HINTS = {
     "ru": {
-        "auto": "Flare: 4 бесплатных в неделю, потом Paint или 3 ₽",
+        "auto": "Flare: 4 бесплатных в неделю, потом векторный Kulsh или 3 ₽",
         "flare": "4 бесплатных в неделю, затем 3 ₽",
         "sunburst": "4 ₽ за картинку",
-        "paint": "бесплатно, рисует текстовая модель",
+        "paint": "бесплатно, векторный рендер текстовой моделью",
     },
     "en": {
-        "auto": "Flare: 4 free weekly, then Paint or 3 ₽",
+        "auto": "Flare: 4 free weekly, then vector Kulsh or 3 ₽",
         "flare": "4 free per week, then 3 ₽",
         "sunburst": "4 ₽ per image",
-        "paint": "free, drawn by a text model",
+        "paint": "free, vector render by a text model",
     },
+}
+
+# Усилие → параметры запроса к провайдеру изображений.
+IMAGE_EFFORT_QUALITY = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "high",
+    "max": "high",
 }
 
 
@@ -94,7 +103,8 @@ def image_can_generate(platform: str, user_id: int, choice: str) -> bool:
 
 async def generate_for_user(platform: str, user_id: int, choice: str, spec: dict[str, Any],
                             refs: list[bytes] | None = None,
-                            progress_cb: Callable[[int], Awaitable[None]] | None = None) -> bytes | None:
+                            progress_cb: Callable[[int], Awaitable[None]] | None = None,
+                            effort: str = "medium") -> bytes | None:
     from src.billing import add_credit, charge_balance
     async with _image_locks.setdefault(_usage_key(platform, user_id), asyncio.Lock()):
         model = "gpt-image-2.5-sunburst" if choice == "sunburst" else IMAGE_MODEL
@@ -103,7 +113,7 @@ async def generate_for_user(platform: str, user_id: int, choice: str, spec: dict
             raise RuntimeError("insufficient image balance")
         success = False
         try:
-            result = await generate_image(spec, refs, progress_cb, model=model)
+            result = await generate_image(spec, refs, progress_cb, model=model, effort=effort)
             success = bool(result)
             if success and cost == 0:
                 consume_image(platform, user_id)
@@ -322,6 +332,7 @@ async def generate_image(
     refs: list[bytes] | None = None,
     progress_cb: Callable[[int], Awaitable[None]] | None = None,
     model: str = IMAGE_MODEL,
+    effort: str = "medium",
 ) -> bytes | None:
     """Генерирует или редактирует изображение. Модель фиксирована внутри."""
     if not ETAGEONE_API_KEY:
@@ -332,6 +343,7 @@ async def generate_image(
         raise RuntimeError("empty image prompt")
     prompt = prompt[:4000]
     size = _size_for(spec)
+    quality = IMAGE_EFFORT_QUALITY.get(str(effort or "medium").lower(), "medium")
     images = dedupe_refs(list(refs or []), limit=4)
 
     ticker_task: asyncio.Task[None] | None = None
@@ -348,6 +360,7 @@ async def generate_image(
                 form.add_field("prompt", prompt)
                 form.add_field("n", "1")
                 form.add_field("size", size)
+                form.add_field("quality", quality)
                 form.add_field("response_format", "b64_json")
                 field = "image" if len(images) == 1 else "image[]"
                 for idx, raw in enumerate(images):
@@ -371,6 +384,7 @@ async def generate_image(
                     "prompt": prompt,
                     "n": 1,
                     "size": size,
+                    "quality": quality,
                     "response_format": "b64_json",
                 }
                 async with session.post(

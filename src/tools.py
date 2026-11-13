@@ -118,6 +118,11 @@ async def create_archive(source_dir: str, out_zip: str) -> None:
 
 
 async def run_safe_command(base_dir: str, cmd: str) -> tuple[int, str]:
+    """Безопасная команда внутри рабочей папки.
+
+    На Windows нет ls/cat/grep, поэтому базовые файловые команды выполняются
+    нативно на Python. Остальные разрешённые — через subprocess.
+    """
     parts = cmd.strip().split()
     if not parts:
         return 1, "пустая команда"
@@ -127,6 +132,132 @@ async def run_safe_command(base_dir: str, cmd: str) -> tuple[int, str]:
     for p in parts:
         if any(ch in p for ch in (';', '&', '|', '`', '$', '<', '>', '\n')):
             return 1, "метасимволы запрещены"
+
+    def _resolve(rel: str) -> str | None:
+        target = os.path.realpath(os.path.join(base_dir, rel or "."))
+        base = os.path.realpath(base_dir)
+        if target != base and not target.startswith(base + os.sep):
+            return None
+        return target
+
+    def _native() -> tuple[int, str] | None:
+        args = parts[1:]
+        try:
+            if prog in ("ls", "tree"):
+                rel = args[0] if args else "."
+                target = _resolve(rel)
+                if target is None:
+                    return 1, "путь вне рабочей папки"
+                if not os.path.exists(target):
+                    return 1, "нет такого пути"
+                lines: list[str] = []
+                if prog == "ls" or os.path.isfile(target):
+                    if os.path.isfile(target):
+                        lines.append(os.path.relpath(target, base_dir))
+                    else:
+                        for name in sorted(os.listdir(target)):
+                            full = os.path.join(target, name)
+                            suffix = "/" if os.path.isdir(full) else ""
+                            lines.append(name + suffix)
+                else:
+                    for root, dirs, files in os.walk(target):
+                        rel_root = os.path.relpath(root, base_dir)
+                        depth = 0 if rel_root == "." else rel_root.count(os.sep) + 1
+                        lines.append("  " * depth + (os.path.basename(root) if depth else ".") + "/")
+                        for name in sorted(files):
+                            lines.append("  " * (depth + 1) + name)
+                return 0, "\n".join(lines[:1000]) or "пусто"
+            if prog in ("cat", "head", "tail"):
+                if not args:
+                    return 1, "нужен путь к файлу"
+                target = _resolve(args[0])
+                if target is None or not os.path.isfile(target):
+                    return 1, "нет такого файла"
+                with open(target, "r", encoding="utf-8", errors="replace") as f:
+                    text = f.read(1024 * 1024)
+                lines = text.splitlines()
+                n = 20
+                if len(args) > 1:
+                    try:
+                        n = int(args[1].lstrip("-"))
+                    except ValueError:
+                        n = 20
+                if prog == "head":
+                    lines = lines[:n]
+                elif prog == "tail":
+                    lines = lines[-n:]
+                return 0, "\n".join(lines)
+            if prog == "wc":
+                target = _resolve(args[0]) if args else None
+                if target is None or not os.path.isfile(target):
+                    return 1, "нет такого файла"
+                with open(target, "r", encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+                return 0, f"{len(text.splitlines())} строк, {len(text)} символов"
+            if prog == "grep":
+                if len(args) < 2:
+                    return 1, "нужно: grep <текст> <файл>"
+                needle, rel = args[0], args[1]
+                target = _resolve(rel)
+                if target is None or not os.path.isfile(target):
+                    return 1, "нет такого файла"
+                with open(target, "r", encoding="utf-8", errors="replace") as f:
+                    found = [f"{i}: {line}" for i, line in enumerate(f, 1) if needle in line]
+                return 0, "\n".join(found[:500]) or "не найдено"
+            if prog == "find":
+                needle = args[0] if args else ""
+                hits = []
+                for root, _dirs, files in os.walk(base_dir):
+                    for name in files:
+                        if needle.lower() in name.lower():
+                            hits.append(os.path.relpath(os.path.join(root, name), base_dir))
+                return 0, "\n".join(sorted(hits)[:500]) or "не найдено"
+            if prog == "pwd":
+                return 0, base_dir
+            if prog in ("mkdir", "touch", "rm", "cp", "mv"):
+                if not args:
+                    return 1, "нужен путь"
+                src = _resolve(args[0])
+                if src is None:
+                    return 1, "путь вне рабочей папки"
+                if prog == "mkdir":
+                    os.makedirs(src, exist_ok=True)
+                    return 0, "готово"
+                if prog == "touch":
+                    os.makedirs(os.path.dirname(src) or base_dir, exist_ok=True)
+                    with open(src, "a", encoding="utf-8"):
+                        pass
+                    return 0, "готово"
+                if prog == "rm":
+                    if os.path.isdir(src):
+                        import shutil as _sh
+                        _sh.rmtree(src)
+                    elif os.path.exists(src):
+                        os.remove(src)
+                    return 0, "готово"
+                if len(args) < 2:
+                    return 1, "нужно: cp/mv <откуда> <куда>"
+                dst = _resolve(args[1])
+                if dst is None:
+                    return 1, "путь вне рабочей папки"
+                os.makedirs(os.path.dirname(dst) or base_dir, exist_ok=True)
+                import shutil as _sh
+                if prog == "cp":
+                    if os.path.isdir(src):
+                        _sh.copytree(src, dst, dirs_exist_ok=True)
+                    else:
+                        _sh.copy2(src, dst)
+                else:
+                    _sh.move(src, dst)
+                return 0, "готово"
+        except Exception as exc:
+            return 1, f"ошибка: {exc}"
+        return None
+
+    native = _native()
+    if native is not None:
+        return native
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *parts, cwd=base_dir,

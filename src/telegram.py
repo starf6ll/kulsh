@@ -23,10 +23,14 @@ from src import agent
 from src.loops import send_donation_alert
 from src.ai import (
     extract_search_marker,
+    extract_page_marker,
+    extract_urls,
+    fetch_page_text,
     format_search_results,
     ask_ai_async,
     web_search,
     user_wants_chart,
+    wants_page_read,
 )
 from src.charts import extract_chart_marker, render_infographic
 from src.draw import process_drawing
@@ -61,17 +65,18 @@ from src.rich import (
     typing_with_delay_tg,
 )
 from src.ui import (
+    build_effort_keyboard,
     build_image_model_keyboard,
     build_menu_text,
     build_start_text,
     config_text,
+    effort_text,
     image_model_text,
     model_picker_text,
-    mode_picker_text,
     build_lang_keyboard,
     build_main_config_keyboard,
     build_menu_keyboard,
-    build_mode_keyboard,
+    build_model_keyboard,
     build_model_keyboard,
     build_start_keyboard,
     build_theme_keyboard,
@@ -79,12 +84,13 @@ from src.ui import (
 from src.util import (
     BOT_VERSION,
     BOT_LOG_FILE,
-    COMMUNICATION_MODES,
+    DRAW_EFFORTS,
     DONATE_URL,
     GITHUB_URL,
     MINI_APP_URL,
     MODEL_LIST,
     model_display_name,
+    draw_effort_label,
     PREMIUM_ADMIN_ID,
     REACT_PATTERN,
     STICKER_POOL,
@@ -138,6 +144,11 @@ tg_bot: Any = None
 def _media() -> Any:
     from src import media as media_mod
     return media_mod
+
+
+def _workspace() -> Any:
+    from src import workspace as ws_mod
+    return ws_mod
 
 
 async def get_avatar_description_tg(message: types.Message, chat_id: int, user_id: int, lang: str = "ru") -> str | None:
@@ -374,28 +385,15 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         )
 
     if action == "mode":
-        await edit_or_send(call, mode_picker_text("tg", chat_id, user_id, is_private=is_private),
-                            build_mode_keyboard("tg", chat_id, user_id, is_private=is_private))
+        # Режимы убраны — старые кнопки просто открывают настройки.
+        await edit_or_send(call, config_text("tg", chat_id, user_id), _main_kb())
         await tg_bot.answer_callback_query(cb_id(call))
         return
 
     if action == "mode_set":
-        value = extra[0] if extra else "kent"
-        if value == "pro" and not is_private:
-            await tg_bot.answer_callback_query(cb_id(call), tr(lang, "mode_need_dm"), show_alert=True)
-            return
-        if value in COMMUNICATION_MODES:
-            cfg["communication_mode"] = value
-            if value == "assistant":
-                toast = tr(lang, "mode_set", tr(lang, "mode_assistant"))
-            elif value == "pro":
-                toast = tr(lang, "mode_set", tr(lang, "mode_pro"))
-            else:
-                toast = tr(lang, "mode_set", tr(lang, "mode_kent"))
-            save_user_configs()
-        await edit_or_send(call, config_text("tg", chat_id, user_id),
-                            _main_kb())
-        await tg_bot.answer_callback_query(cb_id(call), toast)
+        # Режимы убраны: характер и навыки всегда одни и те же.
+        await edit_or_send(call, config_text("tg", chat_id, user_id), _main_kb())
+        await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_updated"))
         return
 
     if action == "model_set":
@@ -500,21 +498,13 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
         return
 
     if action == "separate":
-        new_val = not cfg.get("separate_enabled", True)
-        if new_val and cfg.get("streaming_enabled", False):
-            await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_mutex"), show_alert=False)
-            return
-        cfg["separate_enabled"] = new_val
+        cfg["separate_enabled"] = not cfg.get("separate_enabled", True)
         save_user_configs()
     elif action == "streaming":
         if not state.premium_functions_enabled:
             await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_premium_off"), show_alert=False)
             return
-        new_val = not cfg.get("streaming_enabled", False)
-        if new_val and cfg.get("separate_enabled", True):
-            await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_mutex"), show_alert=False)
-            return
-        cfg["streaming_enabled"] = new_val
+        cfg["streaming_enabled"] = not cfg.get("streaming_enabled", False)
         save_user_configs()
     elif action == "stickers":
         cfg["stickers_enabled"] = not cfg.get("stickers_enabled", True)
@@ -553,6 +543,19 @@ async def handle_cfg_callback(call: types.CallbackQuery) -> None:
                             build_image_model_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(cb_id(call))
         return
+    elif action == "effort":
+        await edit_or_send(call, effort_text("tg", chat_id, user_id),
+                            build_effort_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(cb_id(call))
+        return
+    elif action == "effort_set":
+        choice = extra[0] if extra else "medium"
+        if choice in DRAW_EFFORTS:
+            cfg["draw_effort"] = choice
+        save_user_configs()
+        await edit_or_send(call, effort_text("tg", chat_id, user_id),
+                            build_effort_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(cb_id(call), draw_effort_label(cfg.get("draw_effort"), lang))
     elif action == "image_set":
         choice = extra[0] if extra else "auto"
         if choice in IMAGE_MODEL_CHOICES:
@@ -869,13 +872,6 @@ async def handle_status(message: types.Message) -> None:
     chat_id = message.chat.id
     cfg = get_user_config("tg", chat_id, message.from_user.id)
     lang = cfg.get("language", "ru")
-    mode_txt = str(cfg.get("communication_mode", "kent"))
-    if mode_txt == "assistant":
-        mode_label = tr(lang, "mode_assistant")
-    elif mode_txt == "pro":
-        mode_label = tr(lang, "mode_pro")
-    else:
-        mode_label = tr(lang, "mode_kent")
     try:
         proc_load = __import__("os").getloadavg()[0]
     except Exception:
@@ -886,7 +882,6 @@ async def handle_status(message: types.Message) -> None:
         f"**{tr(lang, 'status_online')}**\n\n"
         f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
         f"- {tr(lang, 'status_latency')}: `~{max(1, int(proc_load * 40))} ms`\n"
-        f"- {tr(lang, 'status_mode')}: `{mode_label}`\n"
         f"- {tr(lang, 'status_mood')}: `{tr(lang, 'status_mood_value')}`\n\n"
         f"{mood} · v{BOT_VERSION}"
     )
@@ -1316,6 +1311,67 @@ async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tru
     return True
 
 
+# Маркеры, которые не должны мелькать в предпросмотре стрима.
+_STREAM_HIDE_RE = re.compile(
+    r'!\s*(?:separate|sep[ae]rate|react|why|reply|tell|notify(?:_owner)?|refuse|'
+    r'image|draw|term|chart|search|recall[\s_]*media|avatar|sticker|gif|'
+    r'group[\s_]*info|user[\s_]*info|read_page|page|site|files|ls|workspace|'
+    r'read|cat|write|append|replace|send|sendfile|unpack|pack|run|save)'
+    r'(?![A-Za-z])[^\n]*',
+    re.IGNORECASE,
+)
+
+
+def _stream_visible(text: str) -> str:
+    """Убирает служебные маркеры из черновика, чтобы не палить их в стриме."""
+    if not text:
+        return ""
+    cut = len(text)
+    for marker in ("```", "!draw", "!image", "<svg"):
+        idx = text.find(marker)
+        if idx != -1:
+            cut = min(cut, idx)
+    text = text[:cut]
+    text = _STREAM_HIDE_RE.sub(" ", text)
+    text = re.sub(r'[ \t]{2,}', " ", text)
+    return text.strip()
+
+
+async def ask_ai_streamed_tg(chat_id: int, is_private: bool, factory: Any) -> tuple[str, bool]:
+    """Реальный стрим ответа в черновик Telegram.
+
+    Сразу показывает «Готовлю ответ» (без точек — анимацию рисует сам
+    Telegram), затем по мере прихода токенов обновляет черновик.
+    Возвращает (полный ответ, был ли стрим).
+    """
+    if not state.premium_functions_enabled or not is_private:
+        return await factory(None), False
+    draft_id = random.randint(1, 2 ** 30)
+    # Пока провайдер думает — «Готовлю ответ» уже на экране.
+    await stream_draft(chat_id, draft_id, "Готовлю ответ")
+    acc: list[str] = []
+    last_sent = [0.0]
+
+    async def on_delta(piece: str) -> None:
+        acc.append(piece)
+        visible = _stream_visible("".join(acc))
+        if not visible:
+            return
+        now = time.monotonic()
+        # Telegram не любит слишком частые правки черновика.
+        if now - last_sent[0] < 0.35:
+            return
+        last_sent[0] = now
+        await stream_draft(chat_id, draft_id, visible[-3900:])
+
+    answer = await factory(on_delta)
+    visible = _stream_visible("".join(acc))
+    if visible and len(visible) > len(_stream_visible(answer or "")):
+        # Последний кадр — чтобы черновик не оборвался на середине.
+        await stream_draft(chat_id, draft_id, visible[-3900:])
+    return answer, bool(acc)
+
+
 # ============================================================
 # SEND TG AI RESPONSE
 # ============================================================
@@ -1359,19 +1415,86 @@ async def search_with_anim_tg(chat_id: int, reply_to: int | None, query: str) ->
     return results
 
 
+async def read_pages_with_anim_tg(chat_id: int, reply_to: int | None, urls: list[str]) -> str:
+    """Красиво показывает, как бот читает конкретные страницы, и отдаёт текст."""
+    status = None
+    host = _host_of(urls[0]) if urls else "сайт"
+    try:
+        status = await tg_bot.send_message(
+            chat_id, f"📖 открываю {host}", reply_to_message_id=reply_to,
+        )
+    except Exception:
+        status = None
+    pages: list[str] = []
+    for idx, url in enumerate(urls[:5], start=1):
+        host = _host_of(url) or url
+        if status is not None:
+            for frame in (f"📖 читаю {host}…", f"📄 {host} · разбираю текст…"):
+                try:
+                    await tg_bot.edit_message_text(frame, chat_id, status.message_id)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+        page = await fetch_page_text(url, max_chars=5000)
+        if page:
+            pages.append(f"=== {page['title']} ({page['url']}) ===\n{page['text']}")
+            if status is not None:
+                try:
+                    await tg_bot.edit_message_text(
+                        f"✅ {host} · прочитал ({idx}/{min(len(urls), 5)})",
+                        chat_id, status.message_id,
+                    )
+                except Exception:
+                    pass
+        else:
+            pages.append(f"=== {url} ===\nне удалось прочитать страницу")
+            if status is not None:
+                try:
+                    await tg_bot.edit_message_text(
+                        f"⚠️ {host} · не открылось", chat_id, status.message_id,
+                    )
+                except Exception:
+                    pass
+        await asyncio.sleep(0.3)
+    if status is not None:
+        try:
+            await tg_bot.delete_message(chat_id, status.message_id)
+        except Exception:
+            pass
+    return "\n\n".join(pages)
+
+
 async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int,
                               answer_raw: str, user_text: str | None = None,
-                              user_images: list[bytes] | None = None) -> None:
+                              user_images: list[bytes] | None = None,
+                              already_streamed: bool = False) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
     streaming = cfg.get("streaming_enabled", False) and state.premium_functions_enabled
-    if streaming and separate_enabled:
+    if streaming and already_streamed:
         streaming = False
 
     orig_user_text = (user_text or (message.text or message.caption or "")).strip()
 
     answer_raw, _applied_reactions = await _handle_reaction_markers(message, chat_id, user_id, answer_raw or "", cfg)
+
+    # Явная просьба прочитать конкретный сайт (или ссылка в сообщении) —
+    # читаем именно её, с анимацией, без общего веб-поиска.
+    page_urls, answer_raw = extract_page_marker(answer_raw or "")
+    if not page_urls:
+        urls_in_user = extract_urls(orig_user_text)
+        if urls_in_user and wants_page_read(orig_user_text):
+            page_urls = urls_in_user
+    if page_urls and cfg.get("web_search_enabled", True):
+        context = await read_pages_with_anim_tg(chat_id, message.message_id, page_urls)
+        follow_prompt = (
+            f"Пользователь попросил прочитать страницу(ы): {', '.join(page_urls)}\n\n"
+            f"Ты прочитал и получил этот текст:\n{context}\n\n"
+            f"Ответь по существу на его запрос: {orig_user_text or 'перескажи главное'}. "
+            f"Живо, по-человечески, своими словами, без ссылок и служебных пометок."
+        )
+        answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg")
 
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
@@ -1493,18 +1616,84 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
     # перехватится текущим чатом и уйдёт не туда.
     answer_raw, agent_actions = extract_agent_actions(answer_raw or "")
 
+    # Файловые действия рабочей папки (!files, !read, !write, !send, !run...).
+    ws_reports: list[str] = []
+    answer_raw, ws_actions = _workspace().extract_actions(answer_raw or "")
+    if ws_actions:
+        for ws_action in ws_actions:
+            if ws_action.kind == "send":
+                continue  # отправляем отдельно, после текста
+            report = await _workspace().execute_action("tg", chat_id, ws_action)
+            if report:
+                ws_reports.append(report)
+        if ws_reports:
+            results = "\n\n".join(ws_reports)[:9000]
+            follow_prompt = (
+                f"Пользователь написал: {orig_user_text or 'работа с файлами'}\n\n"
+                f"Ты выполнил действия в рабочей папке. Результаты:\n{results}\n\n"
+                f"Ответь пользователю по-человечески и по делу, в своём стиле. "
+                f"Не показывай служебные маркеры и не повторяй весь вывод дословно, если он длинный."
+            )
+            try:
+                answer_raw = await ask_ai_async(
+                    prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg",
+                )
+            except Exception as e:
+                logger.warning(f"workspace followup: {e}")
+                answer_raw = results
+        for ws_action in ws_actions:
+            if ws_action.kind != "send":
+                continue
+            try:
+                data = _workspace().as_bytes("tg", chat_id, ws_action.payload.strip())
+                from io import BytesIO as _BytesIO
+                await tg_bot.send_document(
+                    chat_id, InputFile(_BytesIO(data), file_name=ws_action.payload.strip().split("/")[-1]),
+                    reply_to_message_id=message.message_id,
+                )
+                add_bot_memory(f"tg_{chat_id}", f"[отправил файл {ws_action.payload.strip()}]")
+            except Exception as e:
+                logger.warning(f"workspace send: {e}")
+                ws_reports.append(f"не смог отправить {ws_action.payload}: {e}")
+
     draw_png = None
     draw_before = ""
     draw_after = ""
     draw_generated = False
 
-    def _manual_note(text_before: str, note: str, manual_before: str) -> str:
-        parts = [p for p in (text_before, note, manual_before) if p]
-        return "!separate".join(parts)
+    async def _send_early(text: str) -> None:
+        """Отправляет текст до картинки сразу, ещё пока её нет."""
+        segments, _ = process_ai_response(text or "", separate_enabled=separate_enabled)
+        for idx, seg in enumerate(segments):
+            seg = scrub_stray_markers(seg)
+            if cfg.get("communication_mode", "kent") == "kent":
+                seg = strip_chat_emojis(seg)
+                seg = strip_chat_punctuation(seg)
+            if not seg:
+                continue
+            try:
+                await typing_with_delay_tg(chat_id, seg, delay=calc_typing_delay(seg, segment_index=idx))
+            except Exception:
+                pass
+            try:
+                await send_rich_message(chat_id, seg,
+                                        reply_to=message.message_id if idx == 0 else None)
+            except Exception as e:
+                logger.debug(f"early send fail: {e}")
+                try:
+                    await send_tg_html(chat_id, seg,
+                                       reply_to=message.message_id if idx == 0 else None)
+                except Exception:
+                    pass
+            add_bot_memory(f"tg_{chat_id}", seg)
+
+    effort = str(cfg.get("draw_effort") or "medium")
 
     if cfg.get("drawing_enabled", True):
         image_spec, image_before, image_after = extract_image_parts(answer_raw or "")
         if image_spec is not None:
+            await _send_early(image_before)
+            answer_raw = ""
             refs = list(user_images or [])
             if image_spec.get("edit"):
                 try:
@@ -1534,16 +1723,19 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
 
                 try:
                     status = await tg_bot.send_message(chat_id, f"🎨🗿 {phrase} | 0%")
-                    png_bytes = await generate_for_user("tg", user_id, image_choice, image_spec, refs, progress_cb=_update_progress)
+                    png_bytes = await generate_for_user(
+                        "tg", user_id, image_choice, image_spec, refs,
+                        progress_cb=_update_progress, effort=effort,
+                    )
                     if png_bytes:
                         draw_png = BytesIO(png_bytes)
-                        draw_before, draw_after = image_before, image_after
+                        draw_before, draw_after = "", image_after
                         draw_generated = True
                     else:
-                        answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_gen_fail")
+                        answer_raw = tr(lang, "image_gen_fail")
                 except Exception as e:
                     logger.error(f"tg image gen: {e}")
-                    answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_gen_fail")
+                    answer_raw = tr(lang, "image_gen_fail")
                 finally:
                     if status is not None:
                         try:
@@ -1556,28 +1748,36 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
                     from src.ai import ask_paint
                     manual_raw = await ask_paint(orig_user_text or str(image_spec.get("prompt", "")),
                                                  "tg", chat_id, user_id,
-                                                 reference_image=(user_images[0] if user_images else None))
+                                                 reference_image=(user_images[0] if user_images else None),
+                                                 effort=effort)
                     mres = await process_drawing(manual_raw or "")
                     if mres.png is not None:
                         draw_png = mres.png
-                        draw_before = _manual_note(
-                            image_before, "рисую вручную" if lang == "ru" else "drawing by hand",
-                            mres.before
-                        )
-                        draw_after = mres.after
+                        draw_before, draw_after = mres.before, mres.after
                     else:
-                        answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_limit_out")
+                        answer_raw = tr(lang, "image_limit_out")
                 except Exception as e:
                     logger.error(f"tg image limit manual fallback: {e}")
-                    answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_limit_out")
+                    answer_raw = tr(lang, "image_limit_out")
         elif "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
             try:
-                res = await process_drawing(answer_raw or "")
-                if res.png is None:
+                from src.draw import extract_draw_parts, extract_svg_parts, extract_term_commands
+                _, text_wo_term = extract_term_commands(answer_raw or "")
+                spec0, before0, _after0 = extract_draw_parts(text_wo_term)
+                if spec0 is None and "<svg" in text_wo_term.lower():
+                    spec0, before0, _after0 = extract_svg_parts(text_wo_term)
+                if spec0 is None:
+                    # Рисунок будет делать текстовая модель — отправляем текст
+                    # до картинки сразу, не дожидаясь рендера.
+                    await _send_early(before0)
+                    answer_raw = ""
                     from src.ai import ask_paint
                     paint_raw = await ask_paint(orig_user_text or "нарисуй картинку", "tg", chat_id, user_id,
-                                                reference_image=(user_images[0] if user_images else None))
+                                                reference_image=(user_images[0] if user_images else None),
+                                                effort=effort)
                     res = await process_drawing(paint_raw)
+                else:
+                    res = await process_drawing(answer_raw or "")
                 draw_png, draw_before, draw_after = res.png, res.before, res.after
                 if res.status:
                     logger.info(f"🎨 draw terminal: {res.status}")
@@ -1590,6 +1790,11 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
     recent_draws = recent_generated_images(f"tg_{chat_id}", 1)
     if (cfg.get("drawing_enabled", True) and draw_png is None
             and wants_drawing(orig_user_text, has_draw_context=bool(user_images) or bool(recent_draws))):
+        # Текст, который модель успела сказать до рисунка, уходит сразу.
+        early_text = scrub_stray_markers(answer_raw or "").strip()
+        if early_text and len(early_text) <= 220:
+            await _send_early(early_text)
+            answer_raw = ""
         reference = user_images[0] if user_images else (recent_draws[0] if recent_draws else None)
         if reference is None:
             try:
@@ -1609,6 +1814,7 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
                 try:
                     png_bytes = await generate_for_user(
                         "tg", user_id, image_choice, spec, [reference] if reference else None,
+                        effort=effort,
                     )
                 except Exception as e:
                     logger.warning(f"tg forced image: {e}")
@@ -1620,7 +1826,7 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
             else:
                 paint_raw = await ask_paint(
                     orig_user_text or "нарисуй картинку", "tg", chat_id, user_id,
-                    reference_image=reference,
+                    reference_image=reference, effort=effort,
                 )
                 res = await process_drawing(paint_raw)
                 if res.png is not None:

@@ -453,8 +453,35 @@ def set_premium_functions_enabled(enabled: bool) -> None:
 
 AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 
-COMMUNICATION_MODES = ("kent", "assistant", "pro")
+# Режимы больше не переключаются: у бота всегда один характер и все навыки.
+# Константы оставлены для совместимости со старыми сохранёнными конфигами.
+COMMUNICATION_MODES = ("kent",)
 DEFAULT_COMMUNICATION_MODE = "kent"
+
+# Усилие (Effort) для рисования.
+DRAW_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+DEFAULT_DRAW_EFFORT = "medium"
+DRAW_EFFORT_LABELS = {
+    "ru": {
+        "low": "Низкие",
+        "medium": "Средние",
+        "high": "Высокие",
+        "xhigh": "Экстра",
+        "max": "Макс",
+    },
+    "en": {
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "xhigh": "Extra",
+        "max": "Max",
+    },
+}
+
+
+def draw_effort_label(effort: str | None, lang: str = "ru") -> str:
+    labels = DRAW_EFFORT_LABELS.get(lang, DRAW_EFFORT_LABELS["ru"])
+    return labels.get(str(effort or DEFAULT_DRAW_EFFORT), labels[DEFAULT_DRAW_EFFORT])
 DS_SCOPES = ("self", "shared")
 
 
@@ -786,6 +813,7 @@ DEFAULT_USER_CONFIG = {
     "web_search_enabled": True,
     "drawing_enabled": True,
     "image_model": "auto",
+    "draw_effort": DEFAULT_DRAW_EFFORT,
     "communication_mode": DEFAULT_COMMUNICATION_MODE,
     "reactions_enabled": True,
 }
@@ -801,10 +829,11 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
         for k, v in DEFAULT_USER_CONFIG.items():
             if k not in cfg:
                 cfg[k] = v
-    if cfg.get("separate_enabled", True) and cfg.get("streaming_enabled", False):
-        cfg["streaming_enabled"] = False
-    if not mode_is_valid(str(cfg.get("communication_mode", DEFAULT_COMMUNICATION_MODE))):
-        cfg["communication_mode"] = DEFAULT_COMMUNICATION_MODE
+    # Раньше режимы переключались; теперь характер всегда один, но старые
+    # конфиги могут содержать assistant/pro. Приводим их к единому режиму.
+    cfg["communication_mode"] = DEFAULT_COMMUNICATION_MODE
+    if str(cfg.get("draw_effort") or DEFAULT_DRAW_EFFORT) not in DRAW_EFFORTS:
+        cfg["draw_effort"] = DEFAULT_DRAW_EFFORT
     return cfg
 
 
@@ -1093,6 +1122,9 @@ STRAY_EXTRA_PATTERNS = (
     re.compile(r'!\s*image\b', re.IGNORECASE),
     re.compile(r'!\s*draw\b', re.IGNORECASE),
     re.compile(r'!\s*term\b[^\n]*', re.IGNORECASE),
+    re.compile(r'!\s*(?:read_page|page|site|читай)\b[^\n]*', re.IGNORECASE),
+    re.compile(r'!\s*(?:files|ls|workspace)\b', re.IGNORECASE),
+    re.compile(r'!\s*(?:read|cat|write|append|replace|send|sendfile|unpack|pack|run|save)\b[^\n]*', re.IGNORECASE),
 )
 SEPARATOR_PATTERN = re.compile(
     # После "separate" может сразу идти текст с заглавной буквы
@@ -1837,7 +1869,10 @@ TEXT_EXTS = {
     "scss", "sass", "less", "kt", "swift", "dart", "lua", "pl", "r", "m", "mm",
 }
 
-SAFE_COMMANDS = {"ls", "cat", "head", "tail", "wc", "grep", "find", "file", "stat", "du", "tree", "pwd"}
+SAFE_COMMANDS = {
+    "ls", "cat", "head", "tail", "wc", "grep", "find", "file", "stat", "du", "tree", "pwd",
+    "mkdir", "touch", "rm", "cp", "mv",
+}
 
 
 def run_git(args: list[str], cwd: str, timeout: int = 60) -> tuple[int, str, str]:

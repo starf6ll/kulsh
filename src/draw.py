@@ -188,10 +188,144 @@ def _radial_gradient(w: int, h: int, inner: Color, outer: Color) -> Image.Image:
     return img
 
 
+def _stops_color(stops: list[tuple[float, tuple[int, int, int]]], t: float) -> tuple[int, int, int]:
+    if not stops:
+        return (0, 0, 0)
+    t = max(0.0, min(1.0, t))
+    prev = stops[0]
+    for stop in stops[1:]:
+        if t <= stop[0]:
+            span = stop[0] - prev[0]
+            local = 0.0 if span <= 0 else (t - prev[0]) / span
+            return (
+                int(prev[1][0] + (stop[1][0] - prev[1][0]) * local),
+                int(prev[1][1] + (stop[1][1] - prev[1][1]) * local),
+                int(prev[1][2] + (stop[1][2] - prev[1][2]) * local),
+            )
+        prev = stop
+    return stops[-1][1]
+
+
+def _multi_linear_gradient(w: int, h: int,
+                           stops: list[tuple[float, tuple[int, int, int]]],
+                           angle: float = 0.0) -> Image.Image:
+    """Линейный градиент с произвольным числом стопов."""
+    if len(stops) <= 2:
+        first = stops[0][1] if stops else (0, 0, 0)
+        last = stops[-1][1] if stops else (255, 255, 255)
+        return _linear_gradient(w, h, first, last, angle)
+    diag = int(math.hypot(w, h))
+    ramp = Image.new("RGB", (diag, 1))
+    px = ramp.load()
+    for x in range(diag):
+        px[x, 0] = _stops_color(stops, x / max(1, diag - 1))
+    ramp = ramp.resize((diag, diag))
+    ramp = ramp.rotate(angle, resample=Image.BICUBIC, expand=False)
+    left = (diag - w) // 2
+    top = (diag - h) // 2
+    return ramp.crop((left, top, left + w, top + h))
+
+
+def _multi_radial_gradient(w: int, h: int,
+                           stops: list[tuple[float, tuple[int, int, int]]],
+                           cx_ratio: float = 0.5, cy_ratio: float = 0.5) -> Image.Image:
+    img = Image.new("RGB", (w, h))
+    px = img.load()
+    cx, cy = w * cx_ratio, h * cy_ratio
+    maxd = max(math.hypot(cx, cy), math.hypot(w - cx, cy),
+               math.hypot(cx, h - cy), math.hypot(w - cx, h - cy)) or 1
+    for y in range(h):
+        for x in range(w):
+            px[x, y] = _stops_color(stops, math.hypot(x - cx, y - cy) / maxd)
+    return img
+
+
 # ============================================================
 # FONT RESOLUTION
 # ============================================================
 _FONT_DIR_NAME = "kulsh_draw_fonts"
+
+# Популярные семейства Google Fonts: имя семейства → фрагмент URL css2.
+GOOGLE_FONTS = {
+    "montserrat": "Montserrat:wght@400;700",
+    "inter": "Inter:wght@400;700",
+    "roboto": "Roboto:wght@400;700",
+    "opensans": "Open+Sans:wght@400;700",
+    "open-sans": "Open+Sans:wght@400;700",
+    "lato": "Lato:wght@400;700",
+    "poppins": "Poppins:wght@400;700",
+    "rubik": "Rubik:wght@400;700",
+    "mulish": "Mulish:wght@400;700",
+    "manrope": "Manrope:wght@400;700",
+    "unbounded": "Unbounded:wght@400;700",
+    "nunito": "Nunito:wght@400;700",
+    "oswald": "Oswald:wght@400;700",
+    "bebasneue": "Bebas+Neue",
+    "bebas-neue": "Bebas+Neue",
+    "playfairdisplay": "Playfair+Display:wght@400;700",
+    "playfair-display": "Playfair+Display:wght@400;700",
+    "caveat": "Caveat:wght@400;700",
+    "pacifico": "Pacifico",
+    "comfortaa": "Comfortaa:wght@400;700",
+    "jost": "Jost:wght@400;700",
+    "dmsans": "DM+Sans:wght@400;700",
+    "dm-sans": "DM+Sans:wght@400;700",
+}
+
+
+def _font_cache_dir() -> str:
+    path = os.path.join(tempfile.gettempdir(), _FONT_DIR_NAME)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def fetch_google_font(family: str) -> str | None:
+    """Скачивает TTF из Google Fonts и кэширует в temp. None при ошибке."""
+    key = re.sub(r'[^a-z0-9-]', '', (family or "").lower().replace(" ", ""))
+    if key not in GOOGLE_FONTS:
+        return None
+    cache = _font_cache_dir()
+    cached = os.path.join(cache, f"{key}.ttf")
+    if os.path.isfile(cached) and os.path.getsize(cached) > 1024:
+        return cached
+    try:
+        css_family = GOOGLE_FONTS[key]
+        css_url = f"https://fonts.googleapis.com/css2?family={css_family}&display=swap"
+        # Старый User-Agent заставляет Google Fonts отдать TTF вместо woff2:
+        # Pillow не умеет читать woff2.
+        req = urllib.request.Request(css_url, headers={
+            "User-Agent": "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1)",
+        })
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            css = resp.read().decode("utf-8", errors="replace")
+        urls = re.findall(r'url\((https://fonts\.gstatic\.com/[^)]+\.(?:ttf|woff2|woff))\)', css)
+        if not urls:
+            # На всякий случай — обычный UA, вдруг отдадут ttf.
+            req = urllib.request.Request(css_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0",
+            })
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                css = resp.read().decode("utf-8", errors="replace")
+            urls = re.findall(r'url\((https://fonts\.gstatic\.com/[^)]+\.(?:ttf|woff2|woff))\)', css)
+        if not urls:
+            return None
+        # Берём первый TTF, если есть; иначе пробуем woff2 (Pillow его не читает).
+        ttf = next((u for u in urls if u.endswith(".ttf")), None)
+        if not ttf:
+            return None
+        file_req = urllib.request.Request(ttf, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0",
+        })
+        with urllib.request.urlopen(file_req, timeout=25) as resp:
+            data = resp.read(MAX_ASSET_BYTES + 1)
+        if len(data) > MAX_ASSET_BYTES:
+            return None
+        with open(cached, "wb") as f:
+            f.write(data)
+        return cached
+    except Exception as e:
+        logger.warning(f"google font {family}: {e}")
+        return None
 
 
 def _font_search_dirs() -> list[str]:
@@ -228,6 +362,13 @@ def resolve_font(spec: Any, size: int) -> Font:
                             continue
             except OSError:
                 continue
+        # Шрифты из Google Fonts по имени семейства.
+        downloaded = fetch_google_font(spec)
+        if downloaded:
+            try:
+                return ImageFont.truetype(downloaded, size)
+            except Exception:
+                pass
     for fallback in ("Montserrat-Bold.ttf", "arial.ttf", "DejaVuSans.ttf"):
         for d in _font_search_dirs():
             p = os.path.join(d, fallback)
@@ -466,19 +607,73 @@ def _render_element(img: Image.Image, el: JsonDict) -> None:
         angle = float(el.get("angle", 0))
         w = max(1, x2 - x1)
         h = max(1, y2 - y1)
-        grad = _linear_gradient(w, h, as_rgb(c1), as_rgb(c2), angle)
+        stops_raw = el.get("stops") or el.get("_stops")
+        if isinstance(stops_raw, list) and len(stops_raw) >= 2:
+            parsed = [(float(s[0]), as_rgb(tuple(s[1]))) for s in stops_raw
+                      if isinstance(s, (list, tuple)) and len(s) >= 2]
+            grad = _multi_linear_gradient(w, h, parsed, angle)
+        else:
+            grad = _linear_gradient(w, h, as_rgb(c1), as_rgb(c2), angle)
         img.paste(grad, (x1, y1))
         return
 
     if kind == "radial_gradient":
         x1, y1, x2, y2 = _rect_coords(el)
-        c1 = el.get("inner", el.get("from", "#FFFFFF"))
-        c2 = el.get("outer", el.get("to", "#000000"))
+        stops = el.get("_stops")
         w = max(1, x2 - x1)
         h = max(1, y2 - y1)
-        grad = _radial_gradient(w, h, c1, c2)
+        if isinstance(stops, list) and len(stops) >= 2:
+            parsed = [(float(s[0]), as_rgb(tuple(s[1]))) for s in stops
+                      if isinstance(s, (list, tuple)) and len(s) >= 2]
+            grad = _multi_radial_gradient(w, h, parsed,
+                                          float(el.get("_cx", 0.5)), float(el.get("_cy", 0.5)))
+        else:
+            c1 = el.get("inner", el.get("from", "#FFFFFF"))
+            c2 = el.get("outer", el.get("to", "#000000"))
+            grad = _radial_gradient(w, h, c1, c2)
         img.paste(grad, (x1, y1))
         return
+
+    # Градиентная заливка фигуры из SVG: рисуем фигуру как маску и накладываем
+    # на неё градиент. Это позволяет любой фигуре иметь fill="url(#grad)".
+    stops_raw = el.get("_stops")
+    if isinstance(stops_raw, list) and len(stops_raw) >= 2 and kind in (
+            "rect", "rectangle", "circle", "ellipse", "polygon", "svg"):
+        try:
+            parsed_stops = [(float(s[0]), as_rgb(tuple(s[1]))) for s in stops_raw
+                            if isinstance(s, (list, tuple)) and len(s) >= 2]
+            x1, y1, x2, y2 = _rect_coords(el)
+            bw, bh = max(1, x2 - x1), max(1, y2 - y1)
+            if el.get("_gradient_kind") == "radialgradient":
+                grad = _multi_radial_gradient(bw, bh, parsed_stops,
+                                              float(el.get("_cx", 0.5)), float(el.get("_cy", 0.5)))
+            else:
+                grad = _multi_linear_gradient(bw, bh, parsed_stops,
+                                              float(el.get("_angle", 0.0)))
+            mask = Image.new("L", (bw, bh), 0)
+            mdraw = ImageDraw.Draw(mask)
+            if kind in ("rect", "rectangle"):
+                mdraw.rectangle((0, 0, bw, bh), fill=255)
+            elif kind in ("circle", "ellipse"):
+                mdraw.ellipse((0, 0, bw, bh), fill=255)
+            elif kind == "polygon":
+                pts = [(px - x1, py - y1) for px, py in _points(el.get("points") or [])]
+                if len(pts) >= 3:
+                    mdraw.polygon(pts, fill=255)
+            elif kind == "svg":
+                pts = [(px - x1, py - y1) for px, py in _points(el.get("points") or [])]
+                if len(pts) >= 3:
+                    mdraw.polygon(pts, fill=255)
+            img.paste(grad, (x1, y1), mask)
+            if outline:
+                draw_outline = ImageDraw.Draw(img, "RGBA")
+                if kind in ("rect", "rectangle"):
+                    draw_outline.rectangle((x1, y1, x2, y2), outline=as_rgba(outline), width=width)
+                elif kind in ("circle", "ellipse"):
+                    draw_outline.ellipse((x1, y1, x2, y2), outline=as_rgba(outline), width=width)
+            return
+        except Exception as exc:
+            logger.debug(f"gradient fill: {exc}")
 
     draw = ImageDraw.Draw(img, "RGBA")
 
@@ -909,6 +1104,7 @@ def _svg_style(node: ET.Element) -> dict[str, str]:
             key, value = part.split(":", 1)
             style[key.strip()] = value.strip()
     for key in ("fill", "stroke", "stroke-width", "opacity", "fill-opacity",
+                "stop-color", "stop-opacity",
                 "font-size", "font-family", "text-anchor"):
         if node.get(key) is not None:
             style[key] = str(node.get(key))
@@ -940,6 +1136,10 @@ def _svg_matrix(value: str) -> tuple[float, float, float, float, float, float]:
 
 def _svg_fill(style: dict[str, str], fallback: str = "#000000") -> str | None:
     fill = style.get("fill")
+    if fill and "url(" in fill:
+        # Заливка-градиент: вернуть заглушку, конкретный градиент подставится
+        # на этапе рендера элемента.
+        return "#FFFFFF"
     if fill is None:
         # Если задан только stroke, это контурная графика: не заливаем
         # чёрным по умолчанию, иначе птицы и линии превращаются в кляксы.
@@ -988,6 +1188,56 @@ def svg_to_spec(svg_text: str) -> JsonDict | None:
     sy = height / view[3] if len(view) >= 4 and view[3] else 1.0
     elements: list[JsonDict] = []
     background = "#FFFFFF"
+    gradients: dict[str, dict[str, Any]] = {}
+
+    def _collect_gradients(node: ET.Element) -> None:
+        tag = node.tag.split("}")[-1].lower()
+        if tag in ("lineargradient", "radialgradient"):
+            gid = str(node.get("id") or "")
+            if not gid:
+                return
+            stops: list[tuple[float, tuple[int, int, int]]] = []
+            for child in list(node):
+                ctag = child.tag.split("}")[-1].lower()
+                if ctag != "stop":
+                    continue
+                cstyle = _svg_style(child)
+                offset_raw = str(child.get("offset") or "0").strip()
+                offset = _svg_number(offset_raw, 0.0)
+                if offset_raw.endswith("%"):
+                    offset /= 100.0
+                elif offset > 1.0:
+                    offset /= 100.0
+                # stop-color из style или атрибута
+                color = cstyle.get("stop-color")
+                if not color:
+                    raw_style = str(child.get("style") or "")
+                    m = re.search(r'stop-color\s*:\s*([^;]+)', raw_style)
+                    color = m.group(1).strip() if m else "black"
+                stops.append((max(0.0, min(1.0, offset)), as_rgb(color)))
+            if stops:
+                stops.sort(key=lambda x: x[0])
+                gradients[gid] = {
+                    "kind": tag,
+                    "stops": stops,
+                    "cx": _svg_number(node.get("cx"), 50.0),
+                    "cy": _svg_number(node.get("cy"), 50.0),
+                    "x1": _svg_number(node.get("x1"), 0.0),
+                    "y1": _svg_number(node.get("y1"), 0.0),
+                    "x2": _svg_number(node.get("x2"), 100.0),
+                    "y2": _svg_number(node.get("y2"), 0.0),
+                }
+            return
+        for child in list(node):
+            _collect_gradients(child)
+
+    _collect_gradients(root)
+
+    def _gradient_for(fill_value: str) -> dict[str, Any] | None:
+        m = re.match(r'url\(\s*#([^)\s]+)\s*\)', fill_value or "")
+        if not m:
+            return None
+        return gradients.get(m.group(1))
 
     def point(x: float, y: float, matrix: tuple[float, float, float, float, float, float]) -> tuple[float, float]:
         a, b, c, d, e, f = matrix
@@ -1010,6 +1260,19 @@ def svg_to_spec(svg_text: str) -> JsonDict | None:
         fill = _svg_fill(style)
         outline = _svg_outline(style)
         stroke_width = max(1, int(_svg_number(style.get("stroke-width"), 1)))
+        gradient = _gradient_for(str(style.get("fill") or ""))
+        gradient_meta: dict[str, Any] = {}
+        if gradient:
+            gradient_meta = {
+                "_stops": [[s[0], list(s[1])] for s in gradient["stops"]],
+                "_gradient_kind": gradient["kind"],
+                "_cx": gradient["cx"] / 100.0,
+                "_cy": gradient["cy"] / 100.0,
+                "_angle": math.degrees(math.atan2(
+                    gradient["y2"] - gradient["y1"], gradient["x2"] - gradient["x1"])) % 360,
+            }
+            if gradient["kind"] == "lineargradient" and not _svg_fill(style):
+                fill = "#FFFFFF"
         if tag in ("g", "svg", "defs", "symbol"):
             if tag != "defs":
                 for child in list(node):
@@ -1025,23 +1288,27 @@ def svg_to_spec(svg_text: str) -> JsonDict | None:
                 h = _svg_number(raw_h) * (height / 100.0 if "%" in str(raw_h) else 1)
                 if w <= 0 or h <= 0:
                     return
-                if w >= width * 0.95 and h >= height * 0.95 and fill:
+                if w >= width * 0.95 and h >= height * 0.95 and fill and not gradient:
                     background = fill
                     return
                 p1 = point(x * sx, y * sy, matrix)
                 p2 = point((x + w) * sx, (y + h) * sy, matrix)
-                elements.append({"type": "rect", "x": min(p1[0], p2[0]), "y": min(p1[1], p2[1]),
-                                 "w": abs(p2[0] - p1[0]), "h": abs(p2[1] - p1[1]),
-                                 "fill": fill, "outline": outline, "width": stroke_width})
+                element = {"type": "rect", "x": min(p1[0], p2[0]), "y": min(p1[1], p2[1]),
+                           "w": abs(p2[0] - p1[0]), "h": abs(p2[1] - p1[1]),
+                           "fill": fill, "outline": outline, "width": stroke_width}
+                element.update(gradient_meta)
+                elements.append(element)
             elif tag in ("circle", "ellipse"):
                 cx = _svg_number(node.get("cx")); cy = _svg_number(node.get("cy"))
                 rx = _svg_number(node.get("r")) if tag == "circle" else _svg_number(node.get("rx"))
                 ry = rx if tag == "circle" else _svg_number(node.get("ry"), rx)
                 p1 = point((cx - rx) * sx, (cy - ry) * sy, matrix)
                 p2 = point((cx + rx) * sx, (cy + ry) * sy, matrix)
-                elements.append({"type": "circle", "x": min(p1[0], p2[0]), "y": min(p1[1], p2[1]),
-                                 "x2": max(p1[0], p2[0]), "y2": max(p1[1], p2[1]),
-                                 "fill": fill, "outline": outline, "width": stroke_width})
+                element = {"type": "circle", "x": min(p1[0], p2[0]), "y": min(p1[1], p2[1]),
+                           "x2": max(p1[0], p2[0]), "y2": max(p1[1], p2[1]),
+                           "fill": fill, "outline": outline, "width": stroke_width}
+                element.update(gradient_meta)
+                elements.append(element)
             elif tag == "line":
                 p1 = point(_svg_number(node.get("x1")) * sx, _svg_number(node.get("y1")) * sy, matrix)
                 p2 = point(_svg_number(node.get("x2")) * sx, _svg_number(node.get("y2")) * sy, matrix)
@@ -1051,12 +1318,34 @@ def svg_to_spec(svg_text: str) -> JsonDict | None:
                 raw = [float(x) for x in re.findall(r'-?\d+(?:\.\d+)?', node.get("points") or "")]
                 points = [list(point(raw[i] * sx, raw[i + 1] * sy, matrix))
                           for i in range(0, len(raw) - 1, 2)][:MAX_PATH_POINTS]
-                elements.append({"type": "polygon" if tag == "polygon" else "polyline",
-                                 "points": points, "fill": fill, "outline": outline, "width": stroke_width})
+                element = {"type": "polygon" if tag == "polygon" else "polyline",
+                           "points": points, "fill": fill, "outline": outline, "width": stroke_width}
+                if tag == "polygon" and gradient_meta:
+                    # Для градиента нужен bbox фигуры
+                    xs = [p[0] for p in points]
+                    ys = [p[1] for p in points]
+                    if xs and ys:
+                        element["x"] = min(xs)
+                        element["y"] = min(ys)
+                        element["x2"] = max(xs)
+                        element["y2"] = max(ys)
+                        element.update(gradient_meta)
+                elements.append(element)
             elif tag == "path":
                 d = str(node.get("d") or "")
-                elements.append({"type": "svg", "d": d, "fill": fill, "outline": outline,
-                                 "width": stroke_width, "closed": "z" in d.lower()})
+                element = {"type": "svg", "d": d, "fill": fill, "outline": outline,
+                           "width": stroke_width, "closed": "z" in d.lower()}
+                if gradient_meta and "z" in d.lower():
+                    pts = [(x, y) for _cmd, x, y in svg_path_points(d, 24)]
+                    if pts:
+                        xs = [p[0] for p in pts]
+                        ys = [p[1] for p in pts]
+                        element["x"] = min(xs) * sx
+                        element["y"] = min(ys) * sy
+                        element["x2"] = max(xs) * sx
+                        element["y2"] = max(ys) * sy
+                        element.update(gradient_meta)
+                elements.append(element)
             elif tag == "text":
                 text = "".join(node.itertext()).strip()
                 if not text:

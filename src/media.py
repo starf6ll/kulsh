@@ -30,6 +30,31 @@ def _tg() -> Any:
     return tg
 
 
+async def _sticker_to_image(raw: bytes) -> bytes | None:
+    """Конвертирует стикер (webp/статичный) в PNG. Анимированные — первый кадр."""
+    if not raw:
+        return None
+    try:
+        from io import BytesIO
+        from PIL import Image
+        img = Image.open(BytesIO(raw))
+        try:
+            img.seek(0)
+        except Exception:
+            pass
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGBA")
+        # Приводим к разумному размеру, чтобы не гнать 512px в модель зря.
+        if max(img.size) > 768:
+            img.thumbnail((768, 768))
+        out = BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+    except Exception as e:
+        logger.warning(f"sticker convert: {e}")
+        return None
+
+
 async def _typing_until_cancelled(chat_id: int) -> None:
     while True:
         try:
@@ -37,6 +62,118 @@ async def _typing_until_cancelled(chat_id: int) -> None:
         except Exception:
             pass
         await asyncio.sleep(4)
+
+
+# ============================================================
+# АЛЬБОМЫ (несколько фото одним сообщением)
+# ============================================================
+_album_lock: asyncio.Lock | None = None
+_albums: dict[str, dict[str, Any]] = {}
+ALBUM_WAIT_SECONDS = 1.6
+
+
+def _album_state(media_group_id: str) -> dict[str, Any]:
+    state = _albums.get(media_group_id)
+    if state is None:
+        state = {"messages": [], "task": None}
+        _albums[media_group_id] = state
+    return state
+
+
+async def _process_album(media_group_id: str) -> None:
+    """Ждёт, пока придут все части альбома, и обрабатывает их одним запросом."""
+    try:
+        await asyncio.sleep(ALBUM_WAIT_SECONDS)
+        state = _albums.pop(media_group_id, None)
+        if not state:
+            return
+        messages: list[types.Message] = list(state.get("messages") or [])
+        if not messages:
+            return
+        first = messages[0]
+        user = first.from_user
+        if user is None:
+            return
+        chat_id = first.chat.id
+        user_id = user.id
+        chat_key = f"tg_{chat_id}"
+        cfg = get_user_config("tg", chat_id, user_id)
+        lang = cfg.get("language", "ru")
+
+        images: list[bytes] = []
+        for msg in messages:
+            try:
+                if msg.photo:
+                    images.append(await get_tg_file_bytes(_tg().tg_bot, msg.photo[-1].file_id))
+            except Exception as e:
+                logger.warning(f"album photo: {e}")
+
+        # Фото каждого сообщения альбома уже сохранены в workspace при приёме.
+        caption = next(
+            (m.caption.strip() for m in messages if m.caption and m.caption.strip()), ""
+        )
+        add_user_memory(
+            chat_key, "TG", user.full_name or "Unknown", user.username or "", user_id,
+            caption or f"[альбом из {len(images)} фото]", ["photo"] * max(1, len(images)),
+            message_id=first.message_id,
+        )
+        messages_hist = memory_to_messages(get_chat_memory(chat_key))
+        is_dm = first.chat.type == "private"
+        replied_to_bot = bool(
+            first.reply_to_message and first.reply_to_message.from_user
+            and first.reply_to_message.from_user.id == (tg_bot_id() or 0)
+        )
+        addressed = bool(
+            is_dm or replied_to_bot or re.search(r'(?i)\bкульш\b', caption)
+        )
+        if not addressed:
+            # Просто сохранили альбом в память и в рабочую папку; отвечаем
+            # только если бот реально нужен (упомянули, ответили, ЛС).
+            if await _tg().should_random_reply("tg", chat_id, user_id):
+                answer = await ask_ai_async(
+                    context_type="observer", messages=messages_hist,
+                    chat_id=chat_id, user_id=user_id, platform="tg",
+                )
+                if answer and answer.strip().upper() not in ("НЕТ", "NO"):
+                    last_random_reply[chat_key] = time.time()
+                    await _tg().send_tg_ai_response(first, chat_id, user_id, answer)
+            return
+
+        prompt = caption or (
+            f"Пользователь прислал альбом из {len(images)} изображений одним сообщением. "
+            f"Посмотри на все сразу и ответь одним сообщением."
+        )
+        answer = await ask_ai_async(
+            prompt=prompt,
+            messages=None,
+            image_bytes_list=images or None,
+            image_mime_list=["image/jpeg"] * len(images) if images else None,
+            chat_id=chat_id, user_id=user_id, platform="tg",
+        )
+        if messages_hist and not images:
+            answer = await ask_ai_async(messages=messages_hist, chat_id=chat_id,
+                                        user_id=user_id, platform="tg")
+        await _tg().send_tg_ai_response(
+            first, chat_id, user_id, answer, user_text=caption,
+            user_images=images or None,
+        )
+        asyncio.create_task(extract_memory(chat_key, f"{user.full_name}: [альбом {len(images)} фото] {caption}",
+                                           answer, platform="tg", user_id=user_id, source_chat_id=chat_id))
+    except Exception as e:
+        logger.error(f"album process: {e}")
+
+
+def queue_album_media(message: types.Message) -> bool:
+    """Кладёт фото из альбома в очередь. True — это альбом, обрабатывать отдельно."""
+    if not message.media_group_id or not message.photo:
+        return False
+    mgid = message.media_group_id
+    state = _album_state(mgid)
+    state["messages"].append(message)
+    if state.get("task") is None:
+        state["task"] = asyncio.create_task(_process_album(mgid))
+    return True
+
 
 
 def tg_bot_id() -> int | None:
@@ -286,6 +423,24 @@ async def handle_tg_media(message: types.Message) -> None:
             file_id=file_id, caption=caption,
             message_id=message.message_id,
         )
+        # Всё присланное складываем в рабочую папку чата: модель сможет позже
+        # прочитать или отправить обратно файл, даже если историю почистили.
+        try:
+            from src import workspace as ws
+            raw_upload: bytes | None = None
+            if message.photo:
+                raw_upload = await get_tg_file_bytes(_tg().tg_bot, message.photo[-1].file_id)
+            elif message.document:
+                raw_upload = await get_tg_file_bytes(_tg().tg_bot, message.document.file_id)
+            if raw_upload and message.document:
+                ws.save_upload("tg", chat_id, file_name or "file", raw_upload,
+                               message.document.mime_type or "")
+            elif raw_upload:
+                ws.save_upload("tg", chat_id, f"{media_type}_{message.message_id}",
+                               raw_upload, "image/jpeg")
+            add_bot_memory(chat_key, f"[в рабочую папку сохранён {media_type}: {file_name or media_tag}]")
+        except Exception as e:
+            logger.warning(f"workspace save media: {e}")
 
     # FEMBOY BATTLE
     if is_femboy_battle_command(caption) and message.photo:
@@ -443,6 +598,10 @@ async def handle_tg_media(message: types.Message) -> None:
                        and message.reply_to_message.from_user.id == (tg_bot_id() or 0))
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
 
+    # Несколько фото одним сообщением — один запрос, а не N ответов.
+    if queue_album_media(message):
+        return
+
     if not addressed:
         # Сохраняем в память как "[фото без подписи]" — НЕ подставляем "че на этом?"
         text_for_memory = caption.strip() or f"[{media_tag} без подписи]"
@@ -466,6 +625,16 @@ async def handle_tg_media(message: types.Message) -> None:
     try:
         if message.photo:
             image_bytes = await get_tg_file_bytes(_tg().tg_bot, message.photo[-1].file_id)
+        elif message.sticker:
+            # Стикер — тоже картинка: конвертируем webp/tgs в png, чтобы модель
+            # реально видела, что на нём нарисовано, а не только "[стикер]".
+            raw_sticker = await get_tg_file_bytes(_tg().tg_bot, message.sticker.file_id)
+            image_bytes = await _sticker_to_image(raw_sticker)
+            if image_bytes is None:
+                thumb = getattr(message.sticker, "thumbnail", None)
+                if thumb is not None:
+                    raw_thumb = await get_tg_file_bytes(_tg().tg_bot, thumb.file_id)
+                    image_bytes = await _sticker_to_image(raw_thumb)
         elif message.animation:
             vid = await get_tg_file_bytes(_tg().tg_bot, message.animation.file_id)
             frame = await extract_video_frame(vid, ".mp4")
@@ -492,11 +661,22 @@ async def handle_tg_media(message: types.Message) -> None:
                     f"{prompt or '[медиа без подписи]'} [с медиа: {media_tag}]", [media_tag or "медиа"],
                     message_id=message.message_id)
     messages = memory_to_messages(get_chat_memory(chat_key))
-    answer = await ask_ai_async(messages=messages, image_bytes=image_bytes,
-                                image_mime=image_mime, chat_id=chat_id,
-                                user_id=user_id, platform="tg")
+    stream_enabled = bool(cfg.get("streaming_enabled")) and _tg().state.premium_functions_enabled
+    already_streamed = False
+    if stream_enabled and is_dm:
+        answer, already_streamed = await _tg().ask_ai_streamed_tg(
+            chat_id, True,
+            lambda cb: ask_ai_async(messages=messages, image_bytes=image_bytes,
+                                    image_mime=image_mime, chat_id=chat_id,
+                                    user_id=user_id, platform="tg", on_delta=cb),
+        )
+    else:
+        answer = await ask_ai_async(messages=messages, image_bytes=image_bytes,
+                                    image_mime=image_mime, chat_id=chat_id,
+                                    user_id=user_id, platform="tg")
     user_imgs = [image_bytes] if image_bytes else None
-    await _tg().send_tg_ai_response(message, chat_id, user_id, answer, user_text=prompt, user_images=user_imgs)
+    await _tg().send_tg_ai_response(message, chat_id, user_id, answer, user_text=prompt,
+                                    user_images=user_imgs, already_streamed=already_streamed)
     asyncio.create_task(extract_memory(chat_key, f"{display_name}: [медиа] {caption}", answer,
                                        platform="tg", user_id=user_id, source_chat_id=chat_id))
 
@@ -740,18 +920,33 @@ async def handle_tg_text(message: types.Message) -> None:
                 logger.warning(f"last media for draw: {e}")
 
         messages = memory_to_messages(get_chat_memory(chat_key))
-        typing_task = asyncio.create_task(_typing_until_cancelled(chat_id))
-        try:
-            answer = await ask_ai_async(messages=messages, image_bytes=ref_bytes,
-                                        image_mime="image/jpeg", chat_id=chat_id,
-                                        user_id=user_id, platform="tg")
-        finally:
-            typing_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await typing_task
+        is_private = message.chat.type == "private"
+        stream_enabled = bool(cfg.get("streaming_enabled")) and _tg().state.premium_functions_enabled
+
+        def _factory(cb):
+            return ask_ai_async(messages=messages, image_bytes=ref_bytes,
+                                image_mime="image/jpeg", chat_id=chat_id,
+                                user_id=user_id, platform="tg", on_delta=cb)
+
+        already_streamed = False
+        if stream_enabled and is_private:
+            answer, already_streamed = await _tg().ask_ai_streamed_tg(
+                chat_id, True, lambda cb: _factory(cb),
+            )
+        else:
+            typing_task = asyncio.create_task(_typing_until_cancelled(chat_id))
+            try:
+                answer = await ask_ai_async(messages=messages, image_bytes=ref_bytes,
+                                            image_mime="image/jpeg", chat_id=chat_id,
+                                            user_id=user_id, platform="tg")
+            finally:
+                typing_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await typing_task
         await _tg().send_tg_ai_response(
             message, chat_id, user_id, answer, user_text=text,
             user_images=[ref_bytes] if ref_bytes else None,
+            already_streamed=already_streamed,
         )
         asyncio.create_task(extract_memory(chat_key, f"{display_name}: {text}", answer,
                                            platform="tg", user_id=user_id, source_chat_id=chat_id))

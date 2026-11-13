@@ -16,7 +16,9 @@ from src.util import (
     MINI_APP_URL,
     MODEL_GROUPS,
     MODEL_LIST,
+    DRAW_EFFORTS,
     JsonDict,
+    draw_effort_label,
     json_dict,
     tr,
     get_user_config,
@@ -60,11 +62,7 @@ def mini_app_button(lang: str, is_private: bool) -> StyledButton:
 
 
 def _mode_display(cfg: JsonDict, lang: str) -> str:
-    mode = str(cfg.get("communication_mode", "kent"))
-    if mode == "assistant":
-        return tr(lang, "mode_assistant")
-    if mode == "pro":
-        return tr(lang, "mode_pro")
+    # Режимы убраны: характер и навыки всегда одни и те же.
     return tr(lang, "mode_kent")
 
 
@@ -80,7 +78,6 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
     theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
     stream_txt = on if cfg.get("streaming_enabled") else off
     search_txt = on if cfg.get("web_search_enabled", True) else off
-    mode_txt = _mode_display(cfg, lang)
     # В личке автономных сообщений нет, поэтому и настройки для них нет.
     is_private = platform == "tg" and int(chat_id) > 0
     random_line = "" if is_private else (
@@ -91,13 +88,13 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"**{tr(lang, 'cfg_section_main')}**\n\n"
         f"{tr(lang, 'cfg_lang')}: {tr(lang, 'russian') if lang == 'ru' else tr(lang, 'english')}\n"
         f"{tr(lang, 'cfg_theme')}: {theme_disp}\n"
-        f"{tr(lang, 'cfg_mode')}: {mode_txt}\n"
         f"{tr(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}\n\n"
         f"{line}\n\n"
         f"**{tr(lang, 'cfg_section_content')}**\n\n"
         f"{tr(lang, 'cfg_websearch')}: {search_txt}\n"
         f"{tr(lang, 'cfg_drawing')}: {on if cfg.get('drawing_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_image_model')}: {image_model_label(cfg.get('image_model', 'auto'), lang)}\n"
+        f"{tr(lang, 'cfg_effort')}: {draw_effort_label(cfg.get('draw_effort'), lang)}\n"
         f"{tr(lang, 'cfg_sep')}: {on if cfg.get('separate_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_stream')}: {stream_txt}\n\n"
         f"{line}\n\n"
@@ -124,10 +121,10 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int,
         btn(tr(lang, "cfg_theme"), style=None, callback_data=cb("theme")),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
-        btn(f"{tr(lang, 'cfg_mode')}: {_mode_display(cfg, lang)}",
-            style="primary", callback_data=cb("mode")),
         btn(f"{tr(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}",
             style=None, callback_data=cb("model")),
+        btn(f"{tr(lang, 'cfg_effort')}: {draw_effort_label(cfg.get('draw_effort'), lang)}",
+            style=None, callback_data=cb("effort")),
     )
     kb.row(  # pyright: ignore[reportUnknownMemberType]
         btn(f"{tr(lang, 'cfg_websearch')}: {'✅' if cfg.get('web_search_enabled', True) else '❌'}",
@@ -274,6 +271,48 @@ def build_theme_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKey
     )
     kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data=cb("sub_back")))  # pyright: ignore[reportUnknownMemberType]
     return kb
+
+
+def build_effort_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    cur = str(cfg.get("draw_effort") or "medium")
+    cb = lambda action, *args: _cfg_cb(user_id, action, *args)  # noqa: E731
+    kb = InlineKeyboardMarkup()
+    for effort in DRAW_EFFORTS:
+        mark = "🔘" if cur == effort else "▫️"
+        kb.row(btn(f"{mark} {draw_effort_label(effort, lang)}", style=None,
+                   callback_data=cb("effort_set", effort)))  # pyright: ignore[reportUnknownMemberType]
+    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data=cb("sub_back")))  # pyright: ignore[reportUnknownMemberType]
+    return kb
+
+
+def effort_text(platform: str, chat_id: int, user_id: int) -> str:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    current = str(cfg.get("draw_effort") or "medium")
+    hints = {
+        "ru": {
+            "low": "быстро и просто, минимум деталей",
+            "medium": "обычный баланс скорости и качества",
+            "high": "подробнее, больше слоёв и теней",
+            "xhigh": "настоящий SVG с градиентами и мелкими деталями",
+            "max": "максимум слоёв, градиентов и элементов",
+        },
+        "en": {
+            "low": "fast and simple, minimal detail",
+            "medium": "balanced speed and quality",
+            "high": "more layers, shadows and detail",
+            "xhigh": "real SVG with gradients and fine detail",
+            "max": "maximum layers, gradients and elements",
+        },
+    }.get(lang, {})
+    lines = [f"# {tr(lang, 'cfg_effort')}", "", "---", ""]
+    lines.append(f"**{tr(lang, 'cfg_current')}:** {draw_effort_label(current, lang)}")
+    lines.append("")
+    for effort in DRAW_EFFORTS:
+        lines.append(f"• **{draw_effort_label(effort, lang)}** — {hints.get(effort, '')}")
+    return "\n".join(lines)
 
 
 def image_model_text(platform: str, chat_id: int, user_id: int) -> str:

@@ -566,31 +566,62 @@ async def on_message(message: discord.Message) -> None:
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', message.content) or is_dm
                      or (message.author.bot and await _is_addressed_from_bot_ds(message)))
 
-    if (image_attachments or video_attachments) and addressed:
+    has_sticker = bool(getattr(message, "stickers", None))
+    if (image_attachments or video_attachments or has_sticker) and addressed:
         async with message.channel.typing():
             try:
-                media_bytes: bytes | None = None
-                img_mime = "image/jpeg"
-                if image_attachments:
-                    media_bytes = await download_image_bytes(image_attachments[0].url)
-                    img_mime = image_attachments[0].content_type or "image/jpeg"
-                elif video_attachments:
+                media_list: list[bytes] = []
+                mime_list: list[str] = []
+                for att in image_attachments[:6]:
+                    try:
+                        media_list.append(await download_image_bytes(att.url))
+                        mime_list.append(att.content_type or "image/jpeg")
+                    except Exception as exc:
+                        logger.warning(f"DS attach download: {exc}")
+                if not media_list and video_attachments:
                     vid = await download_image_bytes(video_attachments[0].url)
                     frame = await extract_video_frame(vid, ".mp4")
                     if frame:
-                        media_bytes = frame
+                        media_list.append(frame)
+                        mime_list.append("image/jpeg")
+                if not media_list and getattr(message, "stickers", None):
+                    try:
+                        sticker_url = message.stickers[0].url
+                        sticker_bytes = await download_image_bytes(sticker_url)
+                        media_list.append(sticker_bytes)
+                        mime_list.append("image/png")
+                    except Exception as exc:
+                        logger.warning(f"DS sticker: {exc}")
                 prompt = message.content.strip() or ""
-                add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                                f"{prompt or '[медиа без подписи]'} [с медиа]",
-                                ["photo" if image_attachments else "video"],
-                                message_id=message.id)
+                # Все файлы сообщения — в рабочую папку канала.
+                from src import workspace
+                for att in image_attachments[:6]:
+                    try:
+                        raw = await download_image_bytes(att.url)
+                        workspace.save_upload("ds", chat_id, att.filename or "image", raw,
+                                              att.content_type or "")
+                    except Exception as exc:
+                        logger.warning(f"DS workspace save: {exc}")
+                add_user_memory(
+                    f"ds_{chat_id}", "DS", display_name, username, user_id,
+                    f"{prompt or '[медиа без подписи]'} [с медиа]",
+                    ["photo"] * max(1, len(media_list)),
+                    message_id=message.id,
+                )
                 messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
-                answer = await ask_ai_async(messages=messages, image_bytes=media_bytes,
-                                            image_mime=img_mime, chat_id=chat_id,
-                                            user_id=user_id, platform="ds")
+                if media_list:
+                    answer = await ask_ai_async(
+                        prompt=prompt or f"Пользователь прислал {len(media_list)} изображений. Посмотри на все сразу.",
+                        messages=messages,
+                        image_bytes_list=media_list, image_mime_list=mime_list,
+                        chat_id=chat_id, user_id=user_id, platform="ds",
+                    )
+                else:
+                    answer = await ask_ai_async(messages=messages, chat_id=chat_id,
+                                                user_id=user_id, platform="ds")
                 await send_ds_ai_response(
                     message, chat_id, user_id, answer, user_text=prompt,
-                    user_images=[media_bytes] if media_bytes else None,
+                    user_images=media_list or None,
                 )
                 asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer,
                                                    platform="ds", user_id=user_id, source_chat_id=chat_id))

@@ -6,6 +6,7 @@
 
 import asyncio
 from io import BytesIO
+import io
 import json
 import random
 import re
@@ -14,7 +15,18 @@ from typing import Any
 import discord
 from discord import app_commands
 
-from src.ai import extract_search_marker, format_search_results, ask_ai_async, web_search, user_wants_chart
+from src.ai import (
+    extract_search_marker,
+    extract_page_marker,
+    extract_urls,
+    fetch_page_text,
+    format_search_results,
+    ask_ai_async,
+    web_search,
+    user_wants_chart,
+    wants_page_read,
+)
+from src import workspace
 from src.billing import (
     DONATIONALERTS_PAGE,
     MIN_TOPUP_RUB,
@@ -97,6 +109,8 @@ from src.util import (
     strip_chat_punctuation,
     tr,
     wants_drawing,
+    DRAW_EFFORTS,
+    draw_effort_label,
     AUTHORIZED_UPDATERS,
     GIF_POOL,
     last_search_sources,
@@ -172,6 +186,48 @@ async def search_with_anim_ds(message: discord.Message, query: str) -> list[Any]
         except Exception:
             pass
     return results
+
+
+async def read_pages_with_anim_ds(message: discord.Message, urls: list[str]) -> str:
+    """Показывает чтение конкретных страниц и возвращает их текст."""
+    host = _host_of(urls[0]) if urls else "сайт"
+    status: discord.Message | None = None
+    try:
+        status = await message.reply(f"📖 открываю {host}")
+    except Exception:
+        status = None
+    pages: list[str] = []
+    for idx, url in enumerate(urls[:5], start=1):
+        host = _host_of(url) or url
+        if status is not None:
+            for frame in (f"📖 читаю {host}…", f"📄 {host} · разбираю текст…"):
+                try:
+                    await status.edit(content=frame)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+        page = await fetch_page_text(url, max_chars=5000)
+        if page:
+            pages.append(f"=== {page['title']} ({page['url']}) ===\n{page['text']}")
+            if status is not None:
+                try:
+                    await status.edit(content=f"✅ {host} · прочитал ({idx}/{min(len(urls), 5)})")
+                except Exception:
+                    pass
+        else:
+            pages.append(f"=== {url} ===\nне удалось прочитать страницу")
+            if status is not None:
+                try:
+                    await status.edit(content=f"⚠️ {host} · не открылось")
+                except Exception:
+                    pass
+        await asyncio.sleep(0.3)
+    if status is not None:
+        try:
+            await status.delete()
+        except Exception:
+            pass
+    return "\n\n".join(pages)
 
 
 async def get_avatar_description_ds(message: discord.Message, chat_id: int, user_id: int, lang: str = "ru") -> str | None:
@@ -375,6 +431,51 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied_reactions)}]")
         answer_raw = cleaned_text
 
+    # ---- страница по ссылке ----
+    if cfg.get("web_search_enabled", True):
+        page_urls, answer_raw = extract_page_marker(answer_raw or "")
+        if not page_urls:
+            urls_in_user = extract_urls(orig_user_text)
+            if urls_in_user and wants_page_read(orig_user_text):
+                page_urls = urls_in_user
+        if page_urls:
+            context = await read_pages_with_anim_ds(message, page_urls)
+            follow_prompt = (
+                f"Пользователь попросил прочитать страницу(ы): {', '.join(page_urls)}\n\n"
+                f"Текст страниц:\n{context}\n\n"
+                f"Ответь по существу: {orig_user_text or 'перескажи главное'}. Живо, своими словами."
+            )
+            answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="ds")
+
+    # ---- файловые действия ----
+    ws_reports: list[str] = []
+    answer_raw, ws_actions = workspace.extract_actions(answer_raw or "")
+    if ws_actions:
+        for ws_action in ws_actions:
+            if ws_action.kind == "send":
+                continue
+            report = await workspace.execute_action("ds", chat_id, ws_action)
+            if report:
+                ws_reports.append(report)
+        if ws_reports:
+            results = "\n\n".join(ws_reports)[:9000]
+            answer_raw = await ask_ai_async(
+                prompt=(f"Пользователь написал: {orig_user_text or 'работа с файлами'}\n\n"
+                        f"Результаты действий в рабочей папке:\n{results}\n\n"
+                        f"Ответь по-человечески и по делу, в своём стиле."),
+                chat_id=chat_id, user_id=user_id, platform="ds",
+            )
+        for ws_action in ws_actions:
+            if ws_action.kind != "send":
+                continue
+            try:
+                data = workspace.as_bytes("ds", chat_id, ws_action.payload.strip())
+                await message.reply(file=discord.File(
+                    fp=io.BytesIO(data), filename=ws_action.payload.strip().split("/")[-1],
+                ))
+            except Exception as e:
+                logger.warning(f"ds workspace send: {e}")
+
     # ---- search ----
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
@@ -469,14 +570,29 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
     draw_before = ""
     draw_after = ""
     draw_generated = False
+    effort = str(cfg.get("draw_effort") or "medium")
 
-    def _manual_note(text_before: str, note: str, manual_before: str) -> str:
-        parts = [p for p in (text_before, note, manual_before) if p]
-        return "!separate".join(parts)
+    async def _send_early(text: str) -> None:
+        segments, _ = process_ai_response(text or "", separate_enabled=separate_enabled)
+        for seg in segments:
+            seg = scrub_stray_markers(seg)
+            if cfg.get("communication_mode", "kent") == "kent":
+                seg = strip_chat_emojis(seg)
+                seg = strip_chat_punctuation(seg)
+            if not seg:
+                continue
+            try:
+                await typing_with_delay_ds(message.channel, seg)
+                await message.reply(seg)
+            except Exception as e:
+                logger.debug(f"ds early send: {e}")
+            add_bot_memory(f"ds_{chat_id}", seg)
 
     if cfg.get("drawing_enabled", True):
         image_spec, image_before, image_after = extract_image_parts(answer_raw or "")
         if image_spec is not None:
+            await _send_early(image_before)
+            answer_raw = ""
             refs = list(user_images or [])
             if image_spec.get("edit"):
                 try:
@@ -503,16 +619,17 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
 
                 try:
                     status = await message.reply(f"🎨🗿 {phrase} | 0%")
-                    png_bytes = await generate_for_user("ds", user_id, image_choice, image_spec, refs, progress_cb=_update_progress)
+                    png_bytes = await generate_for_user("ds", user_id, image_choice, image_spec, refs,
+                                                        progress_cb=_update_progress, effort=effort)
                     if png_bytes:
                         draw_png = BytesIO(png_bytes)
-                        draw_before, draw_after = image_before, image_after
+                        draw_before, draw_after = "", image_after
                         draw_generated = True
                     else:
-                        answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_gen_fail")
+                        answer_raw = tr(lang, "image_gen_fail")
                 except Exception as e:
                     logger.error(f"ds image gen: {e}")
-                    answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_gen_fail")
+                    answer_raw = tr(lang, "image_gen_fail")
                 finally:
                     if status is not None:
                         try:
@@ -524,28 +641,34 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     from src.ai import ask_paint
                     manual_raw = await ask_paint(orig_user_text or str(image_spec.get("prompt", "")),
                                                  "ds", chat_id, user_id,
-                                                 reference_image=(user_images[0] if user_images else None))
+                                                 reference_image=(user_images[0] if user_images else None),
+                                                 effort=effort)
                     mres = await process_drawing(manual_raw or "")
                     if mres.png is not None:
                         draw_png = mres.png
-                        draw_before = _manual_note(
-                            image_before, "рисую вручную" if lang == "ru" else "drawing by hand",
-                            mres.before
-                        )
-                        draw_after = mres.after
+                        draw_before, draw_after = mres.before, mres.after
                     else:
-                        answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_limit_out")
+                        answer_raw = tr(lang, "image_limit_out")
                 except Exception as e:
                     logger.error(f"ds image limit manual fallback: {e}")
-                    answer_raw = ((image_before + "\n") if image_before else "") + tr(lang, "image_limit_out")
+                    answer_raw = tr(lang, "image_limit_out")
         elif "!draw" in (answer_raw or "") or "!term" in (answer_raw or ""):
             try:
-                res = await process_drawing(answer_raw or "")
-                if res.png is None:
+                from src.draw import extract_draw_parts, extract_svg_parts, extract_term_commands
+                _, text_wo_term = extract_term_commands(answer_raw or "")
+                spec0, before0, _after0 = extract_draw_parts(text_wo_term)
+                if spec0 is None and "<svg" in text_wo_term.lower():
+                    spec0, before0, _after0 = extract_svg_parts(text_wo_term)
+                if spec0 is None:
+                    await _send_early(before0)
+                    answer_raw = ""
                     from src.ai import ask_paint
                     paint_raw = await ask_paint(orig_user_text or "нарисуй картинку", "ds", chat_id, user_id,
-                                                reference_image=(user_images[0] if user_images else None))
+                                                reference_image=(user_images[0] if user_images else None),
+                                                effort=effort)
                     res = await process_drawing(paint_raw)
+                else:
+                    res = await process_drawing(answer_raw or "")
                 draw_png, draw_before, draw_after = res.png, res.before, res.after
                 if res.status:
                     logger.info(f"🎨 draw terminal: {res.status}")
@@ -557,6 +680,10 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
     recent_draws = recent_generated_images(f"ds_{chat_id}", 1)
     if (cfg.get("drawing_enabled", True) and draw_png is None
             and wants_drawing(orig_user_text, has_draw_context=bool(user_images) or bool(recent_draws))):
+        early_text = scrub_stray_markers(answer_raw or "").strip()
+        if early_text and len(early_text) <= 220:
+            await _send_early(early_text)
+            answer_raw = ""
         reference = user_images[0] if user_images else (recent_draws[0] if recent_draws else None)
         if reference is None:
             try:
@@ -576,6 +703,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                 try:
                     png_bytes = await generate_for_user(
                         "ds", user_id, image_choice, spec, [reference] if reference else None,
+                        effort=effort,
                     )
                 except Exception as e:
                     logger.warning(f"ds forced image: {e}")
@@ -587,7 +715,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             else:
                 paint_raw = await ask_paint(
                     orig_user_text or "нарисуй картинку", "ds", chat_id, user_id,
-                    reference_image=reference,
+                    reference_image=reference, effort=effort,
                 )
                 res = await process_drawing(paint_raw)
                 if res.png is not None:
@@ -820,8 +948,7 @@ def ds_config_embed(chat_id: int, user_id: int, is_dm: bool = False) -> discord.
         prompt = prompt[:900] + "..."
     theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
     lang_disp = tr(lang, "russian") if lang == "ru" else tr(lang, "english")
-    mode_raw = str(cfg.get("communication_mode", "kent"))
-    mode_disp = tr(lang, "mode_assistant") if mode_raw == "assistant" else (tr(lang, "mode_pro") if mode_raw == "pro" else tr(lang, "mode_kent"))
+    effort_disp = draw_effort_label(cfg.get("draw_effort"), lang)
 
     if scope == "shared":
         scope_disp = "🌐 Общие для канала (админ)" if lang == "ru" else "🌐 Shared for channel (admin)"
@@ -838,8 +965,8 @@ def ds_config_embed(chat_id: int, user_id: int, is_dm: bool = False) -> discord.
         embed.add_field(name="🎛 Область", value=scope_disp, inline=False)
         embed.add_field(name="🌐 Язык", value=lang_disp, inline=True)
         embed.add_field(name="🌓 Тема", value=theme_disp, inline=True)
-        embed.add_field(name="🧩 Режим", value=mode_disp, inline=True)
         embed.add_field(name="🧠 Модель", value=model_display_name(cfg.get("model"), lang), inline=True)
+        embed.add_field(name="⚡ Усилие", value=effort_disp, inline=True)
         embed.add_field(name="💬 Разбивка", value=sep, inline=True)
         embed.add_field(name="😀 Реакции", value=reactions, inline=True)
         embed.add_field(name="🔎 Веб-поиск", value=websearch, inline=True)
@@ -857,8 +984,8 @@ def ds_config_embed(chat_id: int, user_id: int, is_dm: bool = False) -> discord.
                 "`кульш конфиг область для_себя|для_всех`\n"
                 "`кульш конфиг язык ru|en`\n"
                 "`кульш конфиг тема тёмная|светлая`\n"
-                "`кульш конфиг режим кент|ассистент`\n"
                 "`кульш конфиг модель <номер|авто>`\n"
+                "`кульш конфиг усилие низкие|средние|высокие|экстра|макс`\n"
                 "`кульш конфиг температура <0.0-2.0>`\n"
                 "`кульш конфиг разбивка вкл|выкл`\n"
                 "`кульш конфиг реакции вкл|выкл`\n"
@@ -874,8 +1001,8 @@ def ds_config_embed(chat_id: int, user_id: int, is_dm: bool = False) -> discord.
         embed.add_field(name="🎛 Scope", value=scope_disp, inline=False)
         embed.add_field(name="🌐 Language", value=lang_disp, inline=True)
         embed.add_field(name="🌓 Theme", value=theme_disp, inline=True)
-        embed.add_field(name="🧩 Mode", value=mode_disp, inline=True)
         embed.add_field(name="🧠 Model", value=model_display_name(cfg.get("model"), lang), inline=True)
+        embed.add_field(name="⚡ Effort", value=effort_disp, inline=True)
         embed.add_field(name="💬 Split", value=sep, inline=True)
         embed.add_field(name="😀 Reactions", value=reactions, inline=True)
         embed.add_field(name="🔎 Web search", value=websearch, inline=True)
@@ -939,27 +1066,24 @@ class DsConfigView(discord.ui.View):
             return "✅" if cfg.get(key, default) else "❌"
 
         theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
-        mode_raw = str(cfg.get("communication_mode", "kent"))
-        mode_disp = (tr(lang, "mode_assistant") if mode_raw == "assistant"
-                     else (tr(lang, "mode_pro") if mode_raw == "pro" else tr(lang, "mode_kent")))
         model_disp = model_display_name(cfg.get("model"), lang)
 
         options = [
             discord.SelectOption(label=f"{tr(lang, 'cfg_lang')}: {tr(lang, 'russian') if lang == 'ru' else tr(lang, 'english')}", value="lang"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_theme')}: {theme_disp}", value="theme"),
-            discord.SelectOption(label=f"{tr(lang, 'cfg_mode')}: {mode_disp}", value="mode"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_model')}: {model_disp}", value="model"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_sep')}: {b('separate_enabled')}", value="separate_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_reactions')}: {b('reactions_enabled')}", value="reactions_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_websearch')}: {b('web_search_enabled')}", value="web_search_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_drawing')}: {b('drawing_enabled')}", value="drawing_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_image_model')}: {image_model_label(cfg.get('image_model', 'auto'), lang)}", value="image_model"),
+            discord.SelectOption(label=f"{tr(lang, 'cfg_effort')}: {draw_effort_label(cfg.get('draw_effort'), lang)}", value="effort"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_stickers')}: {b('stickers_enabled')}", value="stickers_enabled"),
             discord.SelectOption(label=f"{tr(lang, 'cfg_autoreply')}: {b('random_reply_enabled', False)}", value="random_reply_enabled"),
             discord.SelectOption(label=tr(lang, "cfg_edit_prompt"), value="prompt"),
         ]
         if not self.is_dm:
-            options.insert(11, discord.SelectOption(
+            options.append(discord.SelectOption(
                 label=f"{tr(lang, 'cfg_random')}: {b('random_messages_enabled')}",
                 value="random_messages_enabled",
             ))
@@ -1071,7 +1195,7 @@ class DsConfigView(discord.ui.View):
         if value == "image_model":
             await self._open_choice(interaction, "image_model")
             return
-        if value in ("lang", "theme", "mode", "model"):
+        if value in ("lang", "theme", "model", "effort"):
             await self._open_choice(interaction, value)
             return
         await self._refresh_main(interaction)
@@ -1189,14 +1313,17 @@ class DsChoiceView(discord.ui.View):
             ]
             placeholder = tr(lang, "cfg_theme")
         elif self.kind == "mode":
-            cur = str(cfg.get("communication_mode", "kent"))
+            # Режимы убраны: всегда один характер и все навыки.
+            placeholder = tr(lang, "mode_kent")
+        elif self.kind == "effort":
+            cur = str(cfg.get("draw_effort") or "medium")
             options = [
-                discord.SelectOption(label=tr(lang, "mode_kent"), value="kent", default=cur == "kent"),
-                discord.SelectOption(label=tr(lang, "mode_assistant"), value="assistant", default=cur == "assistant"),
+                discord.SelectOption(
+                    label=draw_effort_label(effort, lang), value=effort, default=cur == effort,
+                )
+                for effort in DRAW_EFFORTS
             ]
-            if p.is_dm:
-                options.append(discord.SelectOption(label=tr(lang, "mode_pro"), value="pro", default=cur == "pro"))
-            placeholder = tr(lang, "cfg_choose_mode")
+            placeholder = tr(lang, "cfg_effort")
         elif self.kind == "image_model":
             cur = cfg.get("image_model", "auto")
             hints = IMAGE_MODEL_HINTS.get(lang, IMAGE_MODEL_HINTS["ru"])
@@ -1250,10 +1377,11 @@ class DsChoiceView(discord.ui.View):
         elif self.kind == "theme":
             cfg["theme"] = val
         elif self.kind == "mode":
-            if val == "pro" and not p.is_dm:
-                await interaction.response.send_message(tr(p._lang(), "mode_need_dm"), ephemeral=True)
-                return
-            cfg["communication_mode"] = val
+            # Режимы убраны.
+            return
+        elif self.kind == "effort":
+            if val in DRAW_EFFORTS:
+                cfg["draw_effort"] = val
         elif self.kind == "image_model":
             cfg["image_model"] = val
         elif self.kind == "model":
@@ -1406,14 +1534,22 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
         else:
             await message.reply(tr(lang, "ds_need_specify_theme"))
     elif param in ("режим", "mode"):
-        if val in ("кент", "kent", "default"):
-            cfg["communication_mode"] = "kent"; save_user_configs()
-            await message.reply(tr(lang, "ds_setting_mode", tr(lang, "mode_kent")))
-        elif val in ("ассистент", "assistant"):
-            cfg["communication_mode"] = "assistant"; save_user_configs()
-            await message.reply(tr(lang, "ds_setting_mode", tr(lang, "mode_assistant")))
-        elif val == "pro":
-            await message.reply(tr(lang, "mode_need_dm"))
+        await message.reply("режимы убраны: у кульша всегда один характер и все навыки"
+                            if lang == "ru" else
+                            "modes are gone: kulsh always keeps one personality and all skills")
+    elif param in ("усилие", "effort"):
+        mapping = {
+            "низкие": "low", "низкий": "low", "low": "low",
+            "средние": "medium", "средний": "medium", "medium": "medium",
+            "высокие": "high", "высокий": "high", "high": "high",
+            "экстра": "xhigh", "xhigh": "xhigh", "extra": "xhigh",
+            "макс": "max", "максимум": "max", "max": "max",
+        }
+        effort = mapping.get(val)
+        if effort:
+            cfg["draw_effort"] = effort
+            save_user_configs()
+            await message.reply(f"⚡ {draw_effort_label(effort, lang)}")
         else:
             await message.reply(tr(lang, "ds_unknown_param"))
     elif param in ("серия", "series"):
@@ -1608,8 +1744,6 @@ async def ds_slash_help(interaction: discord.Interaction) -> None:
 async def ds_slash_status(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
     cfg = get_effective_config("ds", interaction.channel_id or 0, interaction.user.id)
-    mode_raw = str(cfg.get("communication_mode", "kent"))
-    mode_label = tr(lang, "mode_assistant") if mode_raw == "assistant" else (tr(lang, "mode_pro") if mode_raw == "pro" else tr(lang, "mode_kent"))
     try:
         latency_ms = round(interaction.client.latency * 1000)
     except Exception:
@@ -1619,7 +1753,6 @@ async def ds_slash_status(interaction: discord.Interaction) -> None:
         f"**{tr(lang, 'status_online')}**\n\n"
         f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
         f"- {tr(lang, 'status_latency')}: `~{latency_ms} ms`\n"
-        f"- {tr(lang, 'status_mode')}: `{mode_label}`\n"
         f"- {tr(lang, 'status_mood')}: `{tr(lang, 'status_mood_value')}`\n\n"
         f"🍷🗿 · v{BOT_VERSION}"
     )
