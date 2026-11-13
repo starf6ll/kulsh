@@ -1642,6 +1642,10 @@ async def send_tg_ai_response(message: types.Message, chat_id: int, user_id: int
         send_targets = [a.payload.strip() for a in ws_actions if a.kind == "send"]
         if not send_targets and any(a.kind == "pack" for a in ws_actions):
             send_targets = [""]  # !pack без !send — отправляем собранный архив
+        if not send_targets:
+            writes = [a for a in ws_actions if a.kind in ("write", "append", "replace")]
+            if writes and re.search(r'(?i)(скинь|отправь|пришли|вышли|файл)', orig_user_text or ""):
+                send_targets = [writes[-1].payload.split("\x1f")[0].strip()]
         for target in send_targets:
             if not target:
                 target = _workspace().latest_archive("tg", chat_id) or _workspace().latest_file("tg", chat_id) or ""

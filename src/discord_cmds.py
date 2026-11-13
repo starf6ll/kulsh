@@ -463,6 +463,10 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         send_targets = [a.payload.strip() for a in ws_actions if a.kind == "send"]
         if not send_targets and any(a.kind == "pack" for a in ws_actions):
             send_targets = [""]  # !pack без !send — отправляем архив
+        if not send_targets:
+            writes = [a for a in ws_actions if a.kind in ("write", "append", "replace")]
+            if writes and re.search(r'(?i)(скинь|отправь|пришли|вышли|файл)', orig_user_text or ""):
+                send_targets = [writes[-1].payload.split("\x1f")[0].strip()]
         for target in send_targets:
             if not target:
                 target = workspace.latest_archive("ds", chat_id) or workspace.latest_file("ds", chat_id) or ""
