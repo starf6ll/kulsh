@@ -281,15 +281,18 @@ def _font_cache_dir() -> str:
 
 def fetch_google_font(family: str) -> str | None:
     """Скачивает TTF из Google Fonts и кэширует в temp. None при ошибке."""
-    key = re.sub(r'[^a-z0-9-]', '', (family or "").lower().replace(" ", ""))
-    if key not in GOOGLE_FONTS:
+    raw_family = (family or "").strip()
+    if not raw_family or not re.fullmatch(r"[A-Za-z0-9 \-]+", raw_family):
+        return None
+    key = re.sub(r'[^a-z0-9-]', '', raw_family.lower().replace(" ", ""))
+    if not key:
         return None
     cache = _font_cache_dir()
     cached = os.path.join(cache, f"{key}.ttf")
     if os.path.isfile(cached) and os.path.getsize(cached) > 1024:
         return cached
     try:
-        css_family = GOOGLE_FONTS[key]
+        css_family = GOOGLE_FONTS.get(key) or raw_family.replace(" ", "+") + ":wght@400;700"
         css_url = f"https://fonts.googleapis.com/css2?family={css_family}&display=swap"
         # Старый User-Agent заставляет Google Fonts отдать TTF вместо woff2:
         # Pillow не умеет читать woff2.

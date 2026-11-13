@@ -284,9 +284,10 @@ async def _outgoing_image(platform: str, chat_id: int, user_id: int,
     from src.util import get_effective_config
     cfg = get_effective_config(platform, chat_id, user_id)
     choice = cfg.get("image_model", "auto")
+    effort = str(cfg.get("draw_effort") or "medium")
     if spec is not None and choice != "paint" and image_can_generate(platform, user_id, choice):
         try:
-            png = await generate_for_user(platform, user_id, choice, spec, None)
+            png = await generate_for_user(platform, user_id, choice, spec, None, effort=effort)
             if png:
                 return png
         except Exception as exc:
@@ -298,7 +299,7 @@ async def _outgoing_image(platform: str, chat_id: int, user_id: int,
         if isinstance(spec, dict):
             paint_prompt = str(spec.get("prompt") or "").strip()
         paint_prompt = paint_prompt or prompt or "нарисуй картинку"
-        raw = await ask_paint(paint_prompt, platform, chat_id, user_id)
+        raw = await ask_paint(paint_prompt, platform, chat_id, user_id, effort=effort)
         result = await process_drawing(raw or "")
         if result.png is not None:
             return result.png.getvalue()

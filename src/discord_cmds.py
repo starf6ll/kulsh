@@ -727,6 +727,10 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         if draw_png is not None:
             logger.info(f"🎨 принудительный рисунок ds:{chat_id}")
 
+    if (wants_drawing(orig_user_text, has_draw_context=bool(user_images) or bool(recent_draws))
+            and draw_png is None and not (answer_raw or "").strip()):
+        answer_raw = tr(lang, "image_gen_fail")
+
     clean_segments, markers = process_ai_response(
         draw_before if draw_png is not None else answer_raw,
         separate_enabled=separate_enabled,

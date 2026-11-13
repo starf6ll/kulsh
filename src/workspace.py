@@ -259,9 +259,19 @@ def unpack_archive(platform: str, chat_id: int, rel: str) -> list[str]:
     lower = full.lower()
     if lower.endswith(".zip"):
         return _safe_extract_zip(full, dest)
-    if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
+    if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz")):
         return _safe_extract_tar(full, dest)
-    raise ValueError("поддерживаются zip и tar-архивы")
+    # Прочие форматы, которые умеет stdlib (например .gztar/.xztar).
+    try:
+        import shutil as _sh
+        _sh.unpack_archive(full, dest)
+        return [
+            os.path.relpath(os.path.join(root, name), dest)
+            for root, _dirs, files in os.walk(dest)
+            for name in files
+        ][:MAX_WORKSPACE_FILES]
+    except Exception as exc:
+        raise ValueError(f"не смог распаковать архив: {exc}")
 
 
 async def run_command(platform: str, chat_id: int, command: str) -> tuple[int, str]:
